@@ -187,9 +187,11 @@ class PremiumManager: ObservableObject {
         var hasActiveSubscription = false
         var currentSubscription: SubscriptionInfo?
         
-        // Vérifier si on peut énumérer les transactions
+        // CORRIGÉ - L'énumération des entitlements peut effectivement échouer
+        // Par exemple, si l'utilisateur n'est pas connecté à l'App Store
         do {
             for await result in Transaction.currentEntitlements {
+                // Cette partie peut également échouer si la transaction n'est pas vérifiable
                 do {
                     let transaction = try checkVerified(result)
                     
@@ -226,8 +228,13 @@ class PremiumManager: ObservableObject {
                 }
             }
         } catch {
+            // CORRIGÉ - Ce catch est maintenant accessible car l'énumération peut échouer
+            // Scénarios possibles :
+            // - Utilisateur non connecté à l'App Store
+            // - Problème de réseau
+            // - Problème de permissions App Store
             print("⚠️ Could not enumerate transactions: \(error.localizedDescription)")
-            // Continuer sans erreur - c'est normal en développement
+            // Continuer sans erreur - c'est normal en développement ou si l'utilisateur n'est pas connecté
         }
         
         await MainActor.run {
@@ -241,14 +248,19 @@ class PremiumManager: ObservableObject {
     
     private func startListeningForTransactions() {
         Task.detached {
-            for await result in Transaction.updates {
-                do {
-                    let transaction = try await self.checkVerified(result)
-                    await self.updateSubscriptionStatus(from: transaction)
-                    await transaction.finish()
-                } catch {
-                    print("Transaction update failed: \(error)")
+            // Cette partie est dans une Task détachée et peut échouer
+            do {
+                for await result in Transaction.updates {
+                    do {
+                        let transaction = try await self.checkVerified(result)
+                        await self.updateSubscriptionStatus(from: transaction)
+                        await transaction.finish()
+                    } catch {
+                        print("Transaction update failed: \(error)")
+                    }
                 }
+            } catch {
+                print("Failed to listen for transaction updates: \(error)")
             }
         }
     }

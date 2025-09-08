@@ -55,7 +55,7 @@ struct StartupView: View {
         await premiumManager.initialize()
         completeStep(1)
         
-        // Étape 3: Géolocalisation
+        // Étape 3: Géolocalisation - CORRIGÉ
         updateStep(2, "Configuration géolocalisation...")
         setupLocationServices()
         completeStep(2)
@@ -82,18 +82,21 @@ struct StartupView: View {
         print("✅ App initialization completed!")
     }
     
+    // CORRIGÉ - Ne plus appeler authorizationStatus directement
     private func setupLocationServices() {
         guard CLLocationManager.locationServicesEnabled() else {
             print("❌ Location services not available")
             return
         }
         
-        print("📍 Location services available - checking permission status")
+        print("📍 Location services available - setup complete")
         
-        // Déclencher immédiatement la vérification et demande de permission
-        Task {
-            await weatherViewModel.requestLocationPermission()
-        }
+        // CORRIGÉ - La demande sera faite au bon moment via l'interface utilisateur
+        // Cela évite les warnings et respecte le flow UX
+        
+        // Le WeatherViewModel gérera les permissions quand l'utilisateur interagira
+        // CORRIGÉ - Enlever l'await puisque checkInitialLocationStatus est synchrone
+        weatherViewModel.checkInitialLocationStatus()
     }
     
     private func loadInitialWeatherData() async {
@@ -127,7 +130,7 @@ struct InitStep {
     var isCompleted: Bool
 }
 
-// MARK: - Initialization View
+// MARK: - Initialization View - CORRIGÉ
 
 struct InitializationView: View {
     let steps: [InitStep]
@@ -179,7 +182,7 @@ struct InitializationView: View {
             
             // Progress steps
             VStack(spacing: 20) {
-                // Overall progress bar
+                // Overall progress bar - CORRIGÉ
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
                         Text("Initialisation")
@@ -193,13 +196,18 @@ struct InitializationView: View {
                             .foregroundColor(.secondary)
                     }
                     
-                    ProgressView(value: Double(currentStep + 1), total: Double(steps.count))
+                    // CORRIGÉ - S'assurer que la valeur est dans les limites
+                    let safeCurrentStep = max(0, min(currentStep, steps.count - 1))
+                    let progressValue = Double(safeCurrentStep + 1)
+                    let totalValue = Double(max(steps.count, 1)) // Éviter division par zéro
+                    
+                    ProgressView(value: progressValue, total: totalValue)
                         .progressViewStyle(LinearProgressViewStyle())
                         .scaleEffect(y: 2)
                 }
                 
-                // Current step details
-                if currentStep < steps.count {
+                // Current step details - CORRIGÉ
+                if currentStep >= 0 && currentStep < steps.count {
                     VStack(spacing: 12) {
                         HStack {
                             if steps[currentStep].isCompleted {

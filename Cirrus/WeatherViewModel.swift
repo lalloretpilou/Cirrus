@@ -25,11 +25,11 @@ class WeatherViewModel: NSObject, ObservableObject {
     @Published var currentTrip: Trip?
     @Published var plannedTrips: [Trip] = []
     
-    // User location - Corrigé
+    // User location
     @Published var userLocation: CLLocation?
     @Published var locationPermissionStatus: CLAuthorizationStatus = .notDetermined
     @Published var isRequestingLocation = false
-    @Published var hasTriedLocationRequest = false // Éviter la boucle infinie
+    @Published var hasTriedLocationRequest = false
     
     // MARK: - Services
     private let weatherService = WeatherService.shared
@@ -62,17 +62,16 @@ class WeatherViewModel: NSObject, ObservableObject {
         
         print("🔍 Location services enabled: \(CLLocationManager.locationServicesEnabled())")
         
-        // Ne PAS appeler authorizationStatus sur le main thread
-        // Le statut sera obtenu via le delegate
+        // CORRIGÉ - Ne plus appeler authorizationStatus sur le main thread
+        // Le statut sera obtenu automatiquement via le delegate
     }
     
     func checkInitialLocationStatus() {
         print("🔍 Checking initial location status...")
         
-        // Le statut sera mis à jour via le delegate automatiquement
-        // Ne rien faire ici pour éviter les appels sur le main thread
+        // Le statut sera mis à jour automatiquement via locationManagerDidChangeAuthorization
+        // Ne rien forcer ici pour éviter les warnings
         
-        // Si on n'a pas de position après quelques secondes, utiliser la position par défaut
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
             guard let self = self else { return }
             
@@ -84,19 +83,33 @@ class WeatherViewModel: NSObject, ObservableObject {
     }
     
     private func startLocationUpdates() {
+        // CORRIGÉ - Vérification sans appel direct à authorizationStatus
         guard CLLocationManager.locationServicesEnabled() else {
             print("❌ Location services not enabled")
             setDefaultLocation()
             return
         }
         
-        print("▶️ Starting location updates...")
-        isRequestingLocation = true
-        locationManager.startUpdatingLocation()
-        
-        // Arrêter après 10 secondes max pour économiser la batterie
-        DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
-            self?.stopLocationUpdates()
+        // Vérifier le statut via notre propriété plutôt que l'API directe
+        switch locationPermissionStatus {
+        case .authorizedWhenInUse, .authorizedAlways:
+            print("▶️ Starting location updates...")
+            isRequestingLocation = true
+            locationManager.startUpdatingLocation()
+            
+            // Arrêter après 10 secondes max
+            DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
+                self?.stopLocationUpdates()
+            }
+        case .denied, .restricted:
+            print("❌ Location permission denied/restricted")
+            setDefaultLocation()
+        case .notDetermined:
+            print("❓ Location permission not determined yet")
+            // Attendre que l'autorisation soit demandée
+        @unknown default:
+            print("🤷‍♂️ Unknown location status")
+            setDefaultLocation()
         }
     }
     
@@ -107,7 +120,6 @@ class WeatherViewModel: NSObject, ObservableObject {
     }
     
     private func setDefaultLocation() {
-        // Position par défaut : Paris
         let defaultLocation = CLLocation(latitude: 48.8566, longitude: 2.3522)
         userLocation = defaultLocation
         print("🏙️ Using default location: Paris")
@@ -118,7 +130,6 @@ class WeatherViewModel: NSObject, ObservableObject {
     }
     
     private func setupBindings() {
-        // Search text binding with debounce
         $searchText
             .debounce(for: .milliseconds(500), scheduler: RunLoop.main)
             .removeDuplicates()
@@ -129,7 +140,6 @@ class WeatherViewModel: NSObject, ObservableObject {
             }
             .store(in: &cancellables)
         
-        // Premium status changes
         premiumManager.$isPremium
             .sink { [weak self] isPremium in
                 self?.handlePremiumStatusChange(isPremium)
@@ -142,11 +152,9 @@ class WeatherViewModel: NSObject, ObservableObject {
     func loadWeatherForCurrentLocation() async {
         print("🌤️ Loading weather for current location...")
         
-        // Vérifier si on a une position
         guard let userLocation = userLocation else {
             print("📍 No user location available")
             
-            // Éviter la boucle infinie
             if !hasTriedLocationRequest {
                 hasTriedLocationRequest = true
                 await requestLocationPermission()
@@ -199,12 +207,12 @@ class WeatherViewModel: NSObject, ObservableObject {
         await loadWeather(for: currentLocation)
     }
     
-    // MARK: - Location Permission Management - Final Fix
+    // MARK: - Location Permission Management - CORRIGÉ
     
     func requestLocationPermission() async {
         print("🔑 Requesting location permission...")
         
-        // Vérifier l'état actuel depuis le delegate (pas de main thread warning)
+        // CORRIGÉ - Utiliser notre propriété au lieu de l'API directe
         let currentStatus = locationPermissionStatus
         print("📍 Current status from property: \(currentStatus.rawValue)")
         
@@ -214,8 +222,8 @@ class WeatherViewModel: NSObject, ObservableObject {
             hasTriedLocationRequest = true
             locationManager.requestWhenInUseAuthorization()
             
-            // Attendre la réponse de l'utilisateur
-            try? await Task.sleep(nanoseconds: 3_000_000_000) // 3 secondes
+            // Attendre la réponse via le delegate
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
             
         case .authorizedWhenInUse, .authorizedAlways:
             print("✅ Already authorized, starting location updates")
@@ -231,7 +239,6 @@ class WeatherViewModel: NSObject, ObservableObject {
             setDefaultLocation()
         }
         
-        // Si après 3 secondes toujours pas de position, utiliser la position par défaut
         if userLocation == nil {
             print("⏰ No location after timeout, using default")
             setDefaultLocation()
@@ -242,7 +249,7 @@ class WeatherViewModel: NSObject, ObservableObject {
         errorMessage = "Pour obtenir la météo de votre position, activez la géolocalisation dans Réglages > Confidentialité > Services de localisation > Cirrus"
     }
     
-    // MARK: - Test Methods pour simulateur
+    // MARK: - Test Methods
     
     #if DEBUG
     func loadTestWeatherData() async {
@@ -266,7 +273,7 @@ class WeatherViewModel: NSObject, ObservableObject {
         print("🎯 Simulating location: \(name) (\(latitude), \(longitude))")
         let simulatedLocation = CLLocation(latitude: latitude, longitude: longitude)
         userLocation = simulatedLocation
-        hasTriedLocationRequest = true // Marquer comme tenté pour éviter la boucle
+        hasTriedLocationRequest = true
         
         Task {
             await loadWeatherForCurrentLocation()
@@ -310,7 +317,6 @@ class WeatherViewModel: NSObject, ObservableObject {
     }
     
     private func addFavorite(_ location: Location) {
-        // Vérifier les limites pour les utilisateurs gratuits
         if !premiumManager.isPremium && favoriteLocations.count >= maxFreeDestinations {
             showingPremiumSheet = true
             return
@@ -346,7 +352,6 @@ class WeatherViewModel: NSObject, ObservableObject {
     // MARK: - Comparison Feature
     
     func addToComparison(_ location: Location) {
-        // Vérifier les limites Premium
         let maxComparisons = premiumManager.isPremium ? 10 : maxFreeComparisons
         
         guard selectedLocationsForComparison.count < maxComparisons else {
@@ -367,8 +372,6 @@ class WeatherViewModel: NSObject, ObservableObject {
     
     func removeFromComparison(_ location: Location) {
         selectedLocationsForComparison.removeAll { $0.id == location.id }
-        
-        // Supprimer aussi des résultats de comparaison
         comparisonResults.removeAll { $0.location.id == location.id }
     }
     
@@ -399,13 +402,13 @@ class WeatherViewModel: NSObject, ObservableObject {
         showingComparison = false
     }
     
-    // MARK: - Trip Planning (Premium)
+    // MARK: - Trip Planning
     
     func createTrip(name: String, destinations: [Location], startDate: Date, endDate: Date) -> Trip {
         let tripDestinations = destinations.map { location in
             TripDestination(
                 location: location,
-                arrivalDate: startDate, // Simplification, à améliorer
+                arrivalDate: startDate,
                 departureDate: endDate,
                 weatherData: nil,
                 notes: nil,
@@ -434,12 +437,9 @@ class WeatherViewModel: NSObject, ObservableObject {
             return
         }
         
-        // Charger les données météo pour toutes les destinations du voyage
         for destination in trip.destinations {
             do {
                 _ = try await weatherService.getWeatherData(for: destination.location)
-                // Mettre à jour le voyage avec les données météo
-                // Implementation dépend de votre architecture de données
             } catch {
                 print("Error loading weather for trip destination: \(error)")
             }
@@ -450,11 +450,6 @@ class WeatherViewModel: NSObject, ObservableObject {
     
     private func handlePremiumStatusChange(_ isPremium: Bool) {
         if !isPremium {
-            // Limiter les fonctionnalités si l'abonnement expire
-            if favoriteLocations.count > maxFreeDestinations {
-                // Optionnel: informer l'utilisateur qu'il doit choisir ses favorites
-            }
-            
             if selectedLocationsForComparison.count > maxFreeComparisons {
                 selectedLocationsForComparison = Array(selectedLocationsForComparison.prefix(maxFreeComparisons))
             }
@@ -496,10 +491,7 @@ class WeatherViewModel: NSObject, ObservableObject {
     // MARK: - Utility Methods
     
     func formatTemperature(_ temperature: Double) -> String {
-        let formatter = MeasurementFormatter()
-        formatter.unitOptions = .temperatureWithoutUnit
-        let temp = Measurement(value: temperature, unit: UnitTemperature.celsius)
-        return "\(Int(temp.value))°"
+        return "\(Int(temperature.rounded()))°"
     }
     
     func formatWindSpeed(_ speed: Double) -> String {
@@ -525,23 +517,34 @@ class WeatherViewModel: NSObject, ObservableObject {
         }
     }
     
+    func getComfortColor(score: Double) -> Color {
+        switch score {
+        case 0.8...1.0:
+            return .green
+        case 0.6..<0.8:
+            return .yellow
+        case 0.4..<0.6:
+            return .orange
+        case 0.2..<0.4:
+            return .red
+        default:
+            return .red
+        }
+    }
+    
     func requestLocationPermissionForced() async {
         print("🔑 FORCED location permission request...")
         
-        // Reset du flag pour forcer une nouvelle tentative
         hasTriedLocationRequest = false
-        
-        // Forcer la demande
         locationManager.requestWhenInUseAuthorization()
         
-        // Attendre la réponse
-        try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 seconde
+        try? await Task.sleep(nanoseconds: 1_000_000_000)
         
         print("📍 After forced request, status: \(locationPermissionStatus.rawValue)")
     }
 }
 
-// MARK: - CLLocationManagerDelegate - Final Fix
+// MARK: - CLLocationManagerDelegate
 
 extension WeatherViewModel: CLLocationManagerDelegate {
     
@@ -551,7 +554,6 @@ extension WeatherViewModel: CLLocationManagerDelegate {
         print("📍 Location updated: \(location.coordinate.latitude), \(location.coordinate.longitude)")
         print("📍 Accuracy: \(location.horizontalAccuracy)m, Age: \(abs(location.timestamp.timeIntervalSinceNow))s")
         
-        // Ignorer les positions trop anciennes ou imprécises
         guard location.horizontalAccuracy < 100,
               abs(location.timestamp.timeIntervalSinceNow) < 60 else {
             print("⚠️ Location ignored due to poor accuracy or age")
@@ -560,7 +562,7 @@ extension WeatherViewModel: CLLocationManagerDelegate {
         
         Task { @MainActor in
             self.userLocation = location
-            self.stopLocationUpdates() // Économiser la batterie
+            self.stopLocationUpdates()
             await self.loadWeatherForCurrentLocation()
         }
     }
@@ -587,14 +589,12 @@ extension WeatherViewModel: CLLocationManagerDelegate {
                 self.errorMessage = "Erreur de géolocalisation: \(error.localizedDescription)"
             }
             
-            // Utiliser la position par défaut en cas d'échec
             self.setDefaultLocation()
         }
     }
     
     nonisolated func locationManager(_ manager: CLLocationManager, didChangeAuthorization status: CLAuthorizationStatus) {
         print("🔄 Authorization status changed to: \(status.rawValue)")
-        print("📊 Status meanings: 0=notDetermined, 1=restricted, 2=denied, 3=authorizedAlways, 4=authorizedWhenInUse")
         
         Task { @MainActor in
             self.locationPermissionStatus = status
@@ -611,7 +611,6 @@ extension WeatherViewModel: CLLocationManagerDelegate {
                 
             case .notDetermined:
                 print("❓ Location permission not determined")
-                // Premier lancement - la permission sera demandée
                 
             @unknown default:
                 print("🤷‍♂️ Unknown location authorization status")

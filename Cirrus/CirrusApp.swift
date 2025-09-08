@@ -321,22 +321,6 @@ struct ComparisonResultCard: View {
     }
 }
 
-// MARK: - ComfortScoreView (réutilisée)
-
-struct ComfortScoreView: View {
-    let score: Double
-    
-    var body: some View {
-        HStack(spacing: 2) {
-            ForEach(0..<5, id: \.self) { index in
-                Circle()
-                    .fill(index < Int(score * 5) ? Color.green : Color.gray.opacity(0.3))
-                    .frame(width: 6, height: 6)
-            }
-        }
-    }
-}
-
 // MARK: - Planner View
 
 struct PlannerView: View {

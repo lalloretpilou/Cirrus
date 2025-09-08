@@ -2,7 +2,7 @@ import SwiftUI
 import CoreLocation
 
 struct WeatherView: View {
-    @EnvironmentObject var viewModel: WeatherViewModel // Utiliser l'instance du StartupView
+    @EnvironmentObject var viewModel: WeatherViewModel
     @EnvironmentObject var premiumManager: PremiumManager
     
     var body: some View {
@@ -56,8 +56,7 @@ struct WeatherView: View {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     HStack {
                         if premiumManager.isPremium {
-                            Image(systemName: "crown.fill")
-                                .foregroundColor(.yellow)
+                            PremiumCrownIcon()
                         }
                         
                         Button(action: {
@@ -116,6 +115,46 @@ struct WeatherView: View {
     }
 }
 
+// MARK: - Premium Crown Icon
+
+struct PremiumCrownIcon: View {
+    @State private var isAnimating = false
+    
+    var body: some View {
+        ZStack {
+            // Glow effect
+            Image(systemName: "crown.fill")
+                .font(.title2)
+                .foregroundStyle(
+                    LinearGradient(
+                        colors: [.premiumOrange, .premiumGradientEnd],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .blur(radius: isAnimating ? 8 : 4)
+                .opacity(isAnimating ? 0.8 : 0.4)
+            
+            // Main crown
+            Image(systemName: "crown.fill")
+                .font(.title2)
+                .foregroundStyle(
+                    LinearGradient(
+                        colors: [.premiumOrange, .premiumGradientEnd],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+        }
+        .scaleEffect(isAnimating ? 1.1 : 1.0)
+        .onAppear {
+            withAnimation(.easeInOut(duration: 2.0).repeatForever(autoreverses: true)) {
+                isAnimating = true
+            }
+        }
+    }
+}
+
 // MARK: - Current Weather Card
 
 struct CurrentWeatherCard: View {
@@ -145,7 +184,7 @@ struct CurrentWeatherCard: View {
                     viewModel.toggleFavorite(for: weather.location)
                 }) {
                     Image(systemName: viewModel.isFavorite(weather.location) ? "heart.fill" : "heart")
-                        .foregroundColor(viewModel.isFavorite(weather.location) ? .red : .secondary)
+                        .foregroundColor(viewModel.isFavorite(weather.location) ? .premiumOrange : .secondary)
                         .font(.title2)
                 }
             }
@@ -332,7 +371,7 @@ struct WelcomeCard: View {
                         }
                     }
                     .font(.caption)
-                    .foregroundColor(.orange)
+                    .foregroundColor(.premiumOrange)
                 }
                 .padding(.top, 8)
                 #endif
@@ -453,7 +492,7 @@ struct QuickActionsView: View {
             QuickActionButton(
                 icon: "calendar",
                 title: "Planifier",
-                color: .orange,
+                color: .premiumOrange,
                 isPremium: !premiumManager.canUseFeature(.aiAssistant)
             ) {
                 if premiumManager.canUseFeature(.aiAssistant) {
@@ -509,10 +548,7 @@ struct QuickActionButton: View {
                         .foregroundColor(color)
                     
                     if isPremium {
-                        Image(systemName: "crown.fill")
-                            .font(.caption)
-                            .foregroundColor(.yellow)
-                            .background(Circle().fill(.white).frame(width: 16, height: 16))
+                        PremiumBadge()
                             .offset(x: 16, y: -16)
                     }
                 }
@@ -524,6 +560,49 @@ struct QuickActionButton: View {
         }
         .buttonStyle(PlainButtonStyle())
         .frame(maxWidth: .infinity)
+    }
+}
+
+// MARK: - Premium Badge
+
+struct PremiumBadge: View {
+    @State private var isGlowing = false
+    
+    var body: some View {
+        ZStack {
+            // Glow effect
+            Circle()
+                .fill(
+                    RadialGradient(
+                        colors: [.premiumOrange.opacity(0.8), .clear],
+                        center: .center,
+                        startRadius: 2,
+                        endRadius: isGlowing ? 12 : 8
+                    )
+                )
+                .frame(width: 20, height: 20)
+                .animation(.easeInOut(duration: 1.5).repeatForever(autoreverses: true), value: isGlowing)
+            
+            // Badge background
+            Circle()
+                .fill(.white)
+                .frame(width: 16, height: 16)
+                .shadow(radius: 2)
+            
+            // Crown icon
+            Image(systemName: "crown.fill")
+                .font(.system(size: 8, weight: .bold))
+                .foregroundStyle(
+                    LinearGradient(
+                        colors: [.premiumOrange, .premiumGradientEnd],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+        }
+        .onAppear {
+            isGlowing = true
+        }
     }
 }
 
@@ -626,19 +705,50 @@ struct ForecastCard: View {
 
 struct PremiumForecastCard: View {
     @EnvironmentObject var viewModel: WeatherViewModel
+    @State private var isAnimating = false
     
     var body: some View {
         Button(action: {
             viewModel.showingPremiumSheet = true
         }) {
             VStack(spacing: 8) {
-                Image(systemName: "crown.fill")
-                    .font(.title2)
-                    .foregroundColor(.yellow)
+                ZStack {
+                    // Animated glow
+                    Image(systemName: "crown.fill")
+                        .font(.title2)
+                        .foregroundStyle(
+                            LinearGradient(
+                                colors: [.premiumOrange, .premiumGradientEnd],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .blur(radius: isAnimating ? 6 : 2)
+                        .opacity(isAnimating ? 0.8 : 0.4)
+                    
+                    // Main crown
+                    Image(systemName: "crown.fill")
+                        .font(.title2)
+                        .foregroundStyle(
+                            LinearGradient(
+                                colors: [.premiumOrange, .premiumGradientEnd],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                }
+                .scaleEffect(isAnimating ? 1.1 : 1.0)
                 
                 Text("Premium")
                     .font(.caption)
                     .fontWeight(.medium)
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [.premiumOrange, .premiumGradientEnd],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
                 
                 Text("+23 jours")
                     .font(.caption2)
@@ -648,13 +758,31 @@ struct PremiumForecastCard: View {
             .padding(.horizontal, 16)
             .background(
                 RoundedRectangle(cornerRadius: 12)
-                    .fill(Color.yellow.opacity(0.1))
+                    .fill(
+                        LinearGradient(
+                            colors: [.premiumOrange.opacity(0.1), .premiumGradientEnd.opacity(0.1)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
                     .overlay(
                         RoundedRectangle(cornerRadius: 12)
-                            .stroke(Color.yellow.opacity(0.3), style: StrokeStyle(lineWidth: 1, dash: [5]))
+                            .stroke(
+                                LinearGradient(
+                                    colors: [.premiumOrange.opacity(0.5), .premiumGradientEnd.opacity(0.5)],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                ),
+                                style: StrokeStyle(lineWidth: 1, dash: [5])
+                            )
                     )
             )
             .frame(width: 80)
+        }
+        .onAppear {
+            withAnimation(.easeInOut(duration: 2.0).repeatForever(autoreverses: true)) {
+                isAnimating = true
+            }
         }
     }
 }
@@ -751,15 +879,39 @@ struct FavoriteLocationCard: View {
 
 struct PremiumTeaserCard: View {
     @EnvironmentObject var viewModel: WeatherViewModel
+    @State private var isAnimating = false
     
     var body: some View {
         Button(action: {
             viewModel.showingPremiumSheet = true
         }) {
             HStack(spacing: 16) {
-                Image(systemName: "crown.fill")
-                    .font(.title)
-                    .foregroundColor(.yellow)
+                ZStack {
+                    // Animated glow
+                    Image(systemName: "crown.fill")
+                        .font(.title)
+                        .foregroundStyle(
+                            LinearGradient(
+                                colors: [.premiumOrange, .premiumGradientEnd],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .blur(radius: isAnimating ? 8 : 4)
+                        .opacity(isAnimating ? 0.8 : 0.4)
+                    
+                    // Main crown
+                    Image(systemName: "crown.fill")
+                        .font(.title)
+                        .foregroundStyle(
+                            LinearGradient(
+                                colors: [.premiumOrange, .premiumGradientEnd],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                }
+                .scaleEffect(isAnimating ? 1.1 : 1.0)
                 
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Débloquez Premium")
@@ -780,13 +932,70 @@ struct PremiumTeaserCard: View {
             .foregroundColor(.primary)
             .padding(20)
             .background(
-                RoundedRectangle(cornerRadius: 16)
-                    .fill(Color.yellow.opacity(0.1))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 16)
-                            .stroke(Color.yellow.opacity(0.3), lineWidth: 1)
-                    )
+                ZStack {
+                    // Base background
+                    RoundedRectangle(cornerRadius: 16)
+                        .fill(.ultraThinMaterial)
+                    
+                    // Premium gradient overlay
+                    RoundedRectangle(cornerRadius: 16)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    .premiumOrange.opacity(0.1),
+                                    .premiumGradientEnd.opacity(0.1)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                    
+                    // Animated border
+                    RoundedRectangle(cornerRadius: 16)
+                        .stroke(
+                            LinearGradient(
+                                colors: [
+                                    .premiumOrange.opacity(isAnimating ? 0.8 : 0.4),
+                                    .premiumGradientEnd.opacity(isAnimating ? 0.8 : 0.4)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            ),
+                            lineWidth: isAnimating ? 2 : 1
+                        )
+                }
             )
+        }
+        .onAppear {
+            withAnimation(.easeInOut(duration: 2.5).repeatForever(autoreverses: true)) {
+                isAnimating = true
+            }
+        }
+    }
+}
+
+// MARK: - ComfortScoreView
+
+struct ComfortScoreView: View {
+    let score: Double
+    
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(0..<5, id: \.self) { index in
+                Circle()
+                    .fill(index < Int(score * 5) ? scoreColor : Color.gray.opacity(0.3))
+                    .frame(width: 6, height: 6)
+            }
+        }
+    }
+    
+    private var scoreColor: Color {
+        switch score {
+        case 0.8...1.0: return .green
+        case 0.6..<0.8: return .yellow
+        case 0.4..<0.6: return .premiumOrange
+        case 0.2..<0.4: return .red
+        default: return .red
         }
     }
 }
