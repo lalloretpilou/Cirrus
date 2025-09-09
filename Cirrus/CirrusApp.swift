@@ -280,10 +280,6 @@ struct ComparisonResultCard: View {
                         Text(viewModel.getComfortDescription(score: forecast.comfortScore))
                             .font(.caption)
                             .foregroundColor(viewModel.getComfortColor(score: forecast.comfortScore))
-                        
-                        Spacer()
-                        
-                        ComfortScoreView(score: forecast.comfortScore)
                     }
                 }
             }

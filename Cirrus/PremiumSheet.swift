@@ -22,7 +22,6 @@ struct PremiumSheet: View {
                     PremiumHeader()
                     
                     // Features grid
-                    PremiumFeaturesGrid()
                     
                     // Pricing section
                     if !premiumManager.availableProducts.isEmpty {
@@ -113,36 +112,10 @@ struct PremiumHeader: View {
     }
 }
 
-// MARK: - Premium Features Grid
-
-struct PremiumFeaturesGrid: View {
-    @StateObject private var premiumManager = PremiumManager.shared
-    
-    private let columns = [
-        GridItem(.flexible()),
-        GridItem(.flexible())
-    ]
-    
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Fonctionnalités Premium")
-                .font(.title3)
-                .fontWeight(.semibold)
-            
-            LazyVGrid(columns: columns, spacing: 16) {
-                ForEach(premiumManager.getPremiumFeatures(), id: \.rawValue) { feature in
-                    PremiumFeatureCard(feature: feature)
-                }
-            }
-        }
-    }
-}
-
 // MARK: - Premium Feature Card
 
 struct PremiumFeatureCard: View {
-    let feature: PremiumManager.PremiumFeature
-    @StateObject private var premiumManager = PremiumManager.shared
+    let feature: PremiumFeatureDisplay   // <- au lieu de PremiumManager.PremiumFeature
     @State private var isPressed = false
     
     var body: some View {
@@ -161,12 +134,12 @@ struct PremiumFeatureCard: View {
             }
             
             VStack(alignment: .leading, spacing: 4) {
-                Text(feature.displayName)
+                Text(feature.title)    // <- adapte selon ton modèle
                     .font(.subheadline)
                     .fontWeight(.medium)
                     .lineLimit(2)
                 
-                Text(premiumManager.getFeatureDescription(feature))
+                Text(feature.description)  // <- idem
                     .font(.caption)
                     .foregroundColor(.secondary)
                     .lineLimit(3)
