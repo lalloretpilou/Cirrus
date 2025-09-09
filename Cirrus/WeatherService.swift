@@ -14,20 +14,23 @@ class WeatherService: ObservableObject {
     private let session = URLSession.shared
     private var cancellables = Set<AnyCancellable>()
     
-    // Cache pour éviter les appels répétés
-    private var weatherCache: [String: CachedWeatherData] = [:]
+    // Cache pour éviter les appels répétés - FIX: Utilisation de NSCache thread-safe
+    private let weatherCache = NSCache<NSString, CachedWeatherData>()
     private let cacheExpiration: TimeInterval = 10 * 60 // 10 minutes
     
-    private init() {}
+    private init() {
+        weatherCache.countLimit = 50 // Limiter le cache à 50 entrées
+        weatherCache.totalCostLimit = 1024 * 1024 * 10 // 10 MB max
+    }
     
     // MARK: - Public Methods
     
     /// Récupère les données météo en utilisant les deux APIs pour plus de fiabilité
     func getWeatherData(for location: Location) async throws -> WeatherData {
-        let cacheKey = "\(location.coordinates.latitude),\(location.coordinates.longitude)"
+        let cacheKey = NSString(string: "\(location.coordinates.latitude),\(location.coordinates.longitude)")
         
-        // Vérifier le cache
-        if let cachedData = weatherCache[cacheKey],
+        // Vérifier le cache - FIX: Utilisation thread-safe de NSCache
+        if let cachedData = weatherCache.object(forKey: cacheKey),
            Date().timeIntervalSince(cachedData.timestamp) < cacheExpiration {
             return cachedData.weatherData
         }
@@ -80,15 +83,18 @@ class WeatherService: ObservableObject {
             throw combinedError
         }
         
-        // Mettre en cache
-        weatherCache[cacheKey] = CachedWeatherData(weatherData: combinedData, timestamp: Date())
+        // Mettre en cache - FIX: Création thread-safe de CachedWeatherData
+        let cachedData = CachedWeatherData(weatherData: combinedData, timestamp: Date())
+        weatherCache.setObject(cachedData, forKey: cacheKey)
         
         return combinedData
     }
     
     /// Recherche de lieux avec autocomplétion
     func searchLocations(query: String) async throws -> [Location] {
-        // Utiliser WeatherAPI pour la recherche de lieux (meilleure base de données)
+        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return []
+        }
         return try await weatherAPIService.searchLocations(query: query)
     }
     
@@ -134,6 +140,9 @@ class WeatherService: ObservableObject {
     }
     
     private func convertWeatherKitData(_ weather: Weather, for location: Location) -> WeatherData {
+        // FIX: Gestion sécurisée des valeurs optionnelles
+        let windDirection = weather.currentWeather.wind.direction.value ?? 0
+        
         // Convertir les données actuelles
         let current = CurrentWeather(
             temperature: weather.currentWeather.temperature.value,
@@ -149,15 +158,36 @@ class WeatherService: ObservableObject {
             visibility: weather.currentWeather.visibility.value,
             uvIndex: weather.currentWeather.uvIndex.value,
             windSpeed: weather.currentWeather.wind.speed.value,
-            windDirection: Int(weather.currentWeather.wind.direction.value), // Suppression du ?
+            windDirection: Int(windDirection),
             cloudCover: Int(weather.currentWeather.cloudCover * 100),
             dewPoint: weather.currentWeather.dewPoint.value,
             airQuality: nil // WeatherKit ne fournit pas toujours ces données
         )
         
-        // Convertir les prévisions quotidiennes
-        let dailyForecast = weather.dailyForecast.forecast.map { day in
-            DailyForecast(
+        // Convertir les prévisions quotidiennes - FIX: Gestion sécurisée des dates
+        let dailyForecast = weather.dailyForecast.forecast.compactMap { day -> DailyForecast? in
+            guard let sunrise = day.sun.sunrise,
+                  let sunset = day.sun.sunset else {
+                return DailyForecast(
+                    date: day.date,
+                    tempMin: day.lowTemperature.value,
+                    tempMax: day.highTemperature.value,
+                    condition: WeatherCondition(
+                        id: 0,
+                        main: day.condition.description,
+                        description: day.condition.description,
+                        icon: day.symbolName
+                    ),
+                    humidity: Int(weather.currentWeather.humidity * 100),
+                    windSpeed: day.wind.speed.value,
+                    precipitationChance: Int(day.precipitationChance * 100),
+                    uvIndex: day.uvIndex.value,
+                    sunrise: nil,
+                    sunset: nil
+                )
+            }
+            
+            return DailyForecast(
                 date: day.date,
                 tempMin: day.lowTemperature.value,
                 tempMax: day.highTemperature.value,
@@ -167,18 +197,18 @@ class WeatherService: ObservableObject {
                     description: day.condition.description,
                     icon: day.symbolName
                 ),
-                humidity: Int(weather.currentWeather.humidity * 100), // Utiliser l'humidité actuelle comme approximation
+                humidity: Int(weather.currentWeather.humidity * 100),
                 windSpeed: day.wind.speed.value,
                 precipitationChance: Int(day.precipitationChance * 100),
                 uvIndex: day.uvIndex.value,
-                sunrise: day.sun.sunrise,
-                sunset: day.sun.sunset
+                sunrise: sunrise,
+                sunset: sunset
             )
         }
         
-        // Convertir les prévisions horaires
-        let hourlyForecast = weather.hourlyForecast.forecast.prefix(24).map { hour in
-            HourlyForecast(
+        // Convertir les prévisions horaires - FIX: Gestion sécurisée des collections
+        let hourlyForecast = weather.hourlyForecast.forecast.prefix(24).compactMap { hour -> HourlyForecast? in
+            return HourlyForecast(
                 time: hour.date,
                 temperature: hour.temperature.value,
                 feelsLike: hour.apparentTemperature.value,
@@ -206,9 +236,6 @@ class WeatherService: ObservableObject {
     
     private func combineWeatherData(weatherKit: WeatherData, weatherAPI: WeatherData, location: Location) async -> WeatherData {
         // Logique pour combiner les données des deux sources
-        // Utiliser WeatherKit pour les données actuelles (plus précises)
-        // Utiliser WeatherAPI pour les prévisions étendues
-        
         let combinedCurrent = CurrentWeather(
             temperature: weatherKit.current.temperature,
             feelsLike: weatherKit.current.feelsLike,
@@ -224,16 +251,19 @@ class WeatherService: ObservableObject {
             airQuality: weatherAPI.current.airQuality // WeatherAPI a de meilleures données AQI
         )
         
-        // Combiner les prévisions en privilégiant la précision à court terme de WeatherKit
-        // et les prévisions étendues de WeatherAPI
-        var combinedForecast = Array(weatherKit.forecast.prefix(7)) // WeatherKit pour 7 premiers jours
+        // Combiner les prévisions - FIX: Gestion sécurisée des arrays
+        var combinedForecast: [DailyForecast] = []
+        
+        // WeatherKit pour les 7 premiers jours
+        let weatherKitForecast = Array(weatherKit.forecast.prefix(7))
+        combinedForecast.append(contentsOf: weatherKitForecast)
         
         // Ajouter les prévisions étendues de WeatherAPI si Premium
         let canUseExtended = await MainActor.run {
             return PremiumManager.shared.canUseFeature(.extendedForecast)
         }
         
-        if canUseExtended {
+        if canUseExtended && weatherAPI.forecast.count > 7 {
             let extendedForecast = Array(weatherAPI.forecast.dropFirst(7).prefix(23)) // Jours 8-30
             combinedForecast.append(contentsOf: extendedForecast)
         }
@@ -251,17 +281,12 @@ class WeatherService: ObservableObject {
     // MARK: - Cache Management
     
     func clearCache() {
-        weatherCache.removeAll()
+        weatherCache.removeAllObjects()
     }
     
     func cleanExpiredCache() {
-        let now = Date()
-        weatherCache = weatherCache.compactMapValues { cachedData in
-            if now.timeIntervalSince(cachedData.timestamp) < cacheExpiration {
-                return cachedData
-            }
-            return nil
-        }
+        // NSCache gère automatiquement l'expiration et la mémoire
+        // Pas besoin d'implémentation manuelle avec NSCache
     }
 }
 
@@ -278,12 +303,17 @@ class WeatherAPIService {
         let (data, response) = try await session.data(from: url)
         
         guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
-            throw WeatherError.networkError("API request failed")
+              200...299 ~= httpResponse.statusCode else {
+            throw WeatherError.networkError("API request failed with status: \((response as? HTTPURLResponse)?.statusCode ?? 0)")
         }
         
-        let weatherAPIResponse = try JSONDecoder().decode(WeatherAPIResponse.self, from: data)
-        return convertWeatherAPIData(weatherAPIResponse, for: location)
+        do {
+            let weatherAPIResponse = try JSONDecoder().decode(WeatherAPIResponse.self, from: data)
+            return convertWeatherAPIData(weatherAPIResponse, for: location)
+        } catch {
+            print("WeatherAPI decode error: \(error)")
+            throw WeatherError.dataCorrupted
+        }
     }
     
     func searchLocations(query: String) async throws -> [Location] {
@@ -292,12 +322,17 @@ class WeatherAPIService {
         let (data, response) = try await session.data(from: url)
         
         guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
+              200...299 ~= httpResponse.statusCode else {
             throw WeatherError.networkError("Search request failed")
         }
         
-        let locations = try JSONDecoder().decode([WeatherAPILocation].self, from: data)
-        return locations.map { convertLocation($0) }
+        do {
+            let locations = try JSONDecoder().decode([WeatherAPILocation].self, from: data)
+            return locations.map { convertLocation($0) }
+        } catch {
+            print("WeatherAPI search decode error: \(error)")
+            throw WeatherError.dataCorrupted
+        }
     }
     
     private func buildURL(endpoint: String, location: Location, days: Int) -> URL {
@@ -352,9 +387,18 @@ class WeatherAPIService {
             }
         )
         
-        let forecast = response.forecast.forecastday.map { day in
-            DailyForecast(
-                date: ISO8601DateFormatter().date(from: day.date) ?? Date(),
+        // FIX: Gestion sécurisée du parsing des dates
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "yyyy-MM-dd"
+        
+        let forecast = response.forecast.forecastday.compactMap { day -> DailyForecast? in
+            guard let date = dateFormatter.date(from: day.date) else {
+                print("Could not parse date: \(day.date)")
+                return nil
+            }
+            
+            return DailyForecast(
+                date: date,
                 tempMin: day.day.mintemp_c,
                 tempMax: day.day.maxtemp_c,
                 condition: WeatherCondition(
@@ -372,10 +416,18 @@ class WeatherAPIService {
             )
         }
         
+        // FIX: Gestion sécurisée des prévisions horaires
+        let hourlyDateFormatter = ISO8601DateFormatter()
+        
         let hourlyForecast = response.forecast.forecastday.flatMap { day in
-            day.hour.map { hour in
-                HourlyForecast(
-                    time: ISO8601DateFormatter().date(from: hour.time) ?? Date(),
+            day.hour.compactMap { hour -> HourlyForecast? in
+                guard let time = hourlyDateFormatter.date(from: hour.time) else {
+                    print("Could not parse hour time: \(hour.time)")
+                    return nil
+                }
+                
+                return HourlyForecast(
+                    time: time,
                     temperature: hour.temp_c,
                     feelsLike: hour.feelslike_c,
                     condition: WeatherCondition(
@@ -402,8 +454,12 @@ class WeatherAPIService {
     }
     
     private func convertLocation(_ apiLocation: WeatherAPILocation) -> Location {
-        Location(
-            name: "\(apiLocation.name), \(apiLocation.region)",
+        let locationName = apiLocation.region.isEmpty ?
+            apiLocation.name :
+            "\(apiLocation.name), \(apiLocation.region)"
+        
+        return Location(
+            name: locationName,
             country: apiLocation.country,
             coordinates: Location.Coordinates(
                 latitude: apiLocation.lat,
@@ -418,15 +474,22 @@ class WeatherAPIService {
     private func parseTime(_ timeString: String) -> Date? {
         let formatter = DateFormatter()
         formatter.dateFormat = "hh:mm a"
+        formatter.locale = Locale(identifier: "en_US_POSIX")
         return formatter.date(from: timeString)
     }
 }
 
-// MARK: - Cached Data
+// MARK: - Cached Data - FIX: NSCache compatible class
 
-private struct CachedWeatherData {
+private class CachedWeatherData: NSObject {
     let weatherData: WeatherData
     let timestamp: Date
+    
+    init(weatherData: WeatherData, timestamp: Date) {
+        self.weatherData = weatherData
+        self.timestamp = timestamp
+        super.init()
+    }
 }
 
 // MARK: - WeatherAPI Response Models

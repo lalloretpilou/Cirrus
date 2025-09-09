@@ -5,6 +5,7 @@ struct WeatherView: View {
     @EnvironmentObject var viewModel: WeatherViewModel
     @EnvironmentObject var premiumManager: PremiumManager
     @State private var animationOffset: CGFloat = 0
+    @State private var showingSearchBar = false
     
     var body: some View {
         NavigationView {
@@ -13,28 +14,33 @@ struct WeatherView: View {
                 WeatherAnimatedBackground(weather: viewModel.currentWeather)
                     .ignoresSafeArea()
                 
-                ScrollView {
-                    LazyVStack(spacing: 24) {
-                        // Main content based on state
-                        mainContent
-                        
-                        // Additional content when weather is loaded
-                        if viewModel.currentWeather != nil {
-                            additionalContent
+                VStack(spacing: 0) {
+                    // Custom navigation bar with search
+                    CustomNavigationBar(showingSearchBar: $showingSearchBar)
+                    
+                    ScrollView {
+                        LazyVStack(spacing: 28) {
+                            // Main content based on state
+                            mainContent
+                            
+                            // Additional content when weather is loaded
+                            if viewModel.currentWeather != nil {
+                                additionalContent
+                            }
+                            
+                            Spacer(minLength: 140)
                         }
-                        
-                        Spacer(minLength: 120)
+                        .padding(.horizontal, 24)
+                        .padding(.top, 20)
                     }
-                    .padding(.horizontal, 20)
                 }
             }
             .refreshable {
                 await viewModel.refreshWeather()
             }
-            .navigationTitle("")
             .navigationBarHidden(true)
             .sheet(isPresented: $viewModel.showingLocationPicker) {
-                LocationPickerSheet()
+                IntelligentLocationPickerSheet()
             }
             .sheet(isPresented: $viewModel.showingPremiumSheet) {
                 PremiumSheet()
@@ -45,29 +51,761 @@ struct WeatherView: View {
     @ViewBuilder
     private var mainContent: some View {
         if let weather = viewModel.currentWeather {
-            HeroWeatherCard(weather: weather)
+            ImprovedHeroWeatherCard(weather: weather)
                 .transition(.opacity.combined(with: .scale))
         } else if viewModel.isLoading {
-            LoadingWeatherCard()
+            ImprovedLoadingCard()
         } else {
-            LocationSetupCard()
+            ImprovedLocationSetupCard()
         }
     }
     
     @ViewBuilder
     private var additionalContent: some View {
         if let weather = viewModel.currentWeather {
-            WeatherMetricsGrid(weather: weather)
-            PremiumForecastSection(weather: weather)
+            ImprovedWeatherMetricsGrid(weather: weather)
+            ImprovedForecastSection(weather: weather)
+            TravelInsightsCard(weather: weather)
         }
         
         if !premiumManager.isPremium {
-            PremiumShowcaseCard()
+            ImprovedPremiumShowcase()
         }
     }
 }
 
-// MARK: - Animated Weather Background
+// MARK: - Custom Navigation Bar
+struct CustomNavigationBar: View {
+    @Binding var showingSearchBar: Bool
+    @EnvironmentObject var viewModel: WeatherViewModel
+    @EnvironmentObject var premiumManager: PremiumManager
+    
+    var body: some View {
+        HStack {
+            // App title
+            HStack(spacing: 8) {
+                Text("Cirrus")
+                    .font(.title)
+                    .fontWeight(.bold)
+                    .foregroundStyle(appTitleGradient)
+            }
+            
+            Spacer()
+            
+            // Action buttons
+            HStack(spacing: 16) {
+                if premiumManager.isPremium {
+                    PremiumStatusIcon()
+                }
+                
+                searchButton
+                locationButton
+            }
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 16)
+        .background(.ultraThinMaterial)
+    }
+    
+    private var searchButton: some View {
+        Button(action: {
+            showingSearchBar.toggle()
+            viewModel.showingLocationPicker = true
+        }) {
+            Image(systemName: "magnifyingglass")
+                .font(.title2)
+                .foregroundColor(.primary)
+                .frame(width: 44, height: 44)
+                .background(Circle().fill(.ultraThinMaterial))
+                .shadow(color: .black.opacity(0.1), radius: 4)
+        }
+    }
+    
+    private var locationButton: some View {
+        Button(action: {
+            Task {
+                await viewModel.requestLocationPermission()
+                await viewModel.loadWeatherForCurrentLocation()
+            }
+        }) {
+            Image(systemName: "location.fill")
+                .font(.title2)
+                .foregroundColor(locationButtonColor)
+                .frame(width: 44, height: 44)
+                .background(Circle().fill(.ultraThinMaterial))
+                .shadow(color: .black.opacity(0.1), radius: 4)
+        }
+    }
+    
+    private var locationButtonColor: Color {
+        switch viewModel.locationPermissionStatus {
+        case .authorizedWhenInUse, .authorizedAlways:
+            return .green
+        case .denied, .restricted:
+            return .red
+        default:
+            return .orange
+        }
+    }
+    
+    private var appIconGradient: LinearGradient {
+        LinearGradient(
+            colors: [.blue, .purple],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+    }
+    
+    private var appTitleGradient: LinearGradient {
+        LinearGradient(
+            colors: [.primary, .primary.opacity(0.8)],
+            startPoint: .leading,
+            endPoint: .trailing
+        )
+    }
+}
+
+struct PremiumStatusIcon: View {
+    @State private var isGlowing = false
+    
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(premiumGlowGradient)
+                .frame(width: 44, height: 44)
+                .scaleEffect(isGlowing ? 1.2 : 1.0)
+                .opacity(isGlowing ? 0.6 : 0.3)
+                .animation(.easeInOut(duration: 2).repeatForever(autoreverses: true), value: isGlowing)
+            
+            Image(systemName: "crown.fill")
+                .font(.title2)
+                .foregroundStyle(crownGradient)
+        }
+        .onAppear {
+            isGlowing = true
+        }
+    }
+    
+    private var premiumGlowGradient: RadialGradient {
+        RadialGradient(
+            colors: [.orange, .clear],
+            center: .center,
+            startRadius: 5,
+            endRadius: 22
+        )
+    }
+    
+    private var crownGradient: LinearGradient {
+        LinearGradient(
+            colors: [.orange, .red],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+    }
+}
+
+// MARK: - Improved Hero Weather Card
+struct ImprovedHeroWeatherCard: View {
+    let weather: WeatherData
+    @EnvironmentObject var viewModel: WeatherViewModel
+    @State private var cardScale: CGFloat = 0.9
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            ImprovedLocationHeader(weather: weather)
+            
+            VStack(spacing: 32) {
+                temperatureDisplay
+                
+                if let todayForecast = weather.forecast.first {
+                    ImprovedTravelComfort(score: todayForecast.comfortScore)
+                }
+                
+                quickWeatherStats
+            }
+            .padding(.horizontal, 28)
+            .padding(.vertical, 36)
+        }
+        .background(improvedHeroBackground)
+        .scaleEffect(cardScale)
+        .onAppear {
+            withAnimation(.spring(response: 0.8, dampingFraction: 0.8)) {
+                cardScale = 1.0
+            }
+        }
+    }
+    
+    @ViewBuilder
+    private var temperatureDisplay: some View {
+        HStack(alignment: .center, spacing: 24) {
+            VStack(alignment: .leading, spacing: 12) {
+                temperatureText
+                conditionDescription
+                feelsLikeText
+            }
+            
+            Spacer()
+            
+            ImprovedWeatherIcon(condition: weather.current.condition.main, size: 90)
+        }
+    }
+    
+    private var temperatureText: some View {
+        Text(viewModel.formatTemperature(weather.current.temperature))
+            .font(.system(size: 84, weight: .ultraLight, design: .rounded))
+            .foregroundStyle(temperatureGradient)
+    }
+    
+    private var conditionDescription: some View {
+        Text(weather.current.condition.description.capitalized)
+            .font(.title)
+            .fontWeight(.medium)
+            .foregroundColor(.white.opacity(0.95))
+    }
+    
+    private var feelsLikeText: some View {
+        Text("Ressenti \(viewModel.formatTemperature(weather.current.feelsLike))")
+            .font(.headline)
+            .foregroundColor(.white.opacity(0.75))
+    }
+    
+    private var quickWeatherStats: some View {
+        HStack(spacing: 20) {
+            QuickStat(icon: "humidity.fill", value: "\(weather.current.humidity)%", color: .blue)
+            QuickStat(icon: "wind", value: viewModel.formatWindSpeed(weather.current.windSpeed), color: .green)
+            QuickStat(icon: "eye.fill", value: "\(Int(weather.current.visibility))km", color: .purple)
+            QuickStat(icon: "sun.max.fill", value: "UV\(weather.current.uvIndex)", color: .orange)
+        }
+    }
+    
+    private var temperatureGradient: LinearGradient {
+        LinearGradient(
+            colors: [.white, .white.opacity(0.9)],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+    }
+    
+    private var improvedHeroBackground: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 28)
+                .fill(.ultraThinMaterial)
+                .environment(\.colorScheme, .dark)
+            
+            RoundedRectangle(cornerRadius: 28)
+                .fill(heroGradientOverlay)
+            
+            RoundedRectangle(cornerRadius: 28)
+                .stroke(heroBorderGradient, lineWidth: 1.5)
+        }
+        .shadow(color: .black.opacity(0.25), radius: 25, y: 15)
+    }
+    
+    private var heroGradientOverlay: LinearGradient {
+        LinearGradient(
+            colors: [
+                .blue.opacity(0.15),
+                .purple.opacity(0.1),
+                .clear
+            ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+    }
+    
+    private var heroBorderGradient: LinearGradient {
+        LinearGradient(
+            colors: [.white.opacity(0.4), .clear],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+    }
+}
+
+struct QuickStat: View {
+    let icon: String
+    let value: String
+    let color: Color
+    
+    var body: some View {
+        VStack(spacing: 8) {
+            Image(systemName: icon)
+                .font(.title2)
+                .foregroundColor(color)
+            
+            Text(value)
+                .font(.caption)
+                .fontWeight(.medium)
+                .foregroundColor(.white.opacity(0.8))
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
+// MARK: - Improved Location Header with Geocoding
+struct ImprovedLocationHeader: View {
+    let weather: WeatherData
+    @EnvironmentObject var viewModel: WeatherViewModel
+    @State private var displayName: String = ""
+    @State private var isLoadingLocation = false
+    
+    var body: some View {
+        HStack(spacing: 20) {
+            locationInfo
+            
+            Spacer()
+            
+            actionButtons
+        }
+        .padding(.horizontal, 28)
+        .padding(.top, 24)
+        .onAppear {
+            loadLocationName()
+        }
+    }
+    
+    private var locationInfo: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                
+                if isLoadingLocation {
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        .scaleEffect(0.6)
+                } else {
+                    cityNameText
+                }
+            }
+            
+            if !weather.location.country.isEmpty {
+                countryText
+            }
+            
+            lastUpdatedText
+        }
+    }
+    
+    private var cityNameText: some View {
+        Text(displayName.isEmpty ? "Chargement..." : displayName)
+            .font(.title)
+            .fontWeight(.bold)
+            .foregroundColor(.white)
+            .shadow(color: .black.opacity(0.3), radius: 2, x: 1, y: 1)
+    }
+    
+    private var countryText: some View {
+        Text(weather.location.country)
+            .font(.subheadline)
+            .foregroundColor(.white.opacity(0.7))
+    }
+    
+    private var lastUpdatedText: some View {
+        Text("Mise à jour: \(formatUpdateTime(weather.lastUpdated))")
+            .font(.caption)
+            .foregroundColor(.white.opacity(0.6))
+    }
+    
+    private var actionButtons: some View {
+        VStack(spacing: 12) {
+            favoriteButton
+            refreshButton
+        }
+    }
+    
+    private var favoriteButton: some View {
+        Button(action: {
+            viewModel.toggleFavorite(for: weather.location)
+        }) {
+            Image(systemName: viewModel.isFavorite(weather.location) ? "heart.fill" : "heart")
+                .font(.title2)
+                .foregroundColor(viewModel.isFavorite(weather.location) ? .red : .white.opacity(0.7))
+                .frame(width: 44, height: 44)
+                .background(Circle().fill(.white.opacity(0.15)))
+                .scaleEffect(viewModel.isFavorite(weather.location) ? 1.1 : 1.0)
+                .animation(.spring(response: 0.4, dampingFraction: 0.6), value: viewModel.isFavorite(weather.location))
+        }
+    }
+    
+    private var refreshButton: some View {
+        Button(action: {
+            Task {
+                await viewModel.refreshWeather()
+            }
+        }) {
+            Image(systemName: "arrow.clockwise")
+                .font(.title3)
+                .foregroundColor(.white.opacity(0.7))
+                .frame(width: 36, height: 36)
+                .background(Circle().fill(.white.opacity(0.1)))
+        }
+    }
+    
+    private func loadLocationName() {
+        // Utiliser directement le nom résolu du viewModel si disponible
+        if !viewModel.resolvedLocationName.isEmpty {
+            displayName = viewModel.resolvedLocationName
+            return
+        }
+        
+        guard isCurrentLocation() else {
+            displayName = extractCityName(from: weather.location.name)
+            return
+        }
+        
+        // Géocodage inverse pour obtenir le vrai nom de la ville
+        isLoadingLocation = true
+        
+        let geocoder = CLGeocoder()
+        let location = CLLocation(
+            latitude: weather.location.coordinates.latitude,
+            longitude: weather.location.coordinates.longitude
+        )
+        
+        geocoder.reverseGeocodeLocation(location) { [self] placemarks, error in
+            DispatchQueue.main.async {
+                self.isLoadingLocation = false
+                
+                if let placemark = placemarks?.first {
+                    var locationName = ""
+                    
+                    if let locality = placemark.locality {
+                        locationName = locality
+                    } else if let administrativeArea = placemark.administrativeArea {
+                        locationName = administrativeArea
+                    } else if let country = placemark.country {
+                        locationName = country
+                    } else {
+                        locationName = "Position actuelle"
+                    }
+                    
+                    self.displayName = locationName
+                } else {
+                    self.displayName = "Position actuelle"
+                }
+            }
+        }
+    }
+    
+    private func isCurrentLocation() -> Bool {
+        return weather.location.name.contains("position") ||
+               weather.location.name.contains("Position") ||
+               weather.location.name == "Ma position"
+    }
+    
+    private func extractCityName(from fullName: String) -> String {
+        let components = fullName.components(separatedBy: ",")
+        return components.first?.trimmingCharacters(in: .whitespaces) ?? fullName
+    }
+    
+    private func formatUpdateTime(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        return formatter.string(from: date)
+    }
+}
+
+// MARK: - Improved Weather Icon
+struct ImprovedWeatherIcon: View {
+    let condition: String
+    let size: CGFloat
+    @State private var isAnimating = false
+    
+    var body: some View {
+        iconForCondition
+            .onAppear {
+                withAnimation(.easeInOut(duration: 2).repeatForever(autoreverses: true)) {
+                    isAnimating = true
+                }
+            }
+    }
+    
+    @ViewBuilder
+    private var iconForCondition: some View {
+        switch condition.lowercased() {
+        case "clear":
+            ImprovedSunIcon(size: size, isAnimating: isAnimating)
+        case "clouds":
+            ImprovedCloudIcon(size: size, isAnimating: isAnimating)
+        case "rain", "drizzle":
+            ImprovedRainIcon(size: size, isAnimating: isAnimating)
+        case "snow":
+            ImprovedSnowIcon(size: size, isAnimating: isAnimating)
+        default:
+            ImprovedCloudIcon(size: size, isAnimating: isAnimating)
+        }
+    }
+}
+
+struct ImprovedSunIcon: View {
+    let size: CGFloat
+    let isAnimating: Bool
+    
+    var body: some View {
+        ZStack {
+            ForEach(0..<8, id: \.self) { index in
+                sunRay(at: index)
+            }
+            
+            Circle()
+                .fill(sunGradient)
+                .frame(width: size * 0.7, height: size * 0.7)
+                .shadow(color: .yellow.opacity(0.6), radius: isAnimating ? 20 : 15)
+        }
+        .rotationEffect(.degrees(isAnimating ? 360 : 0))
+        .animation(.linear(duration: 12).repeatForever(autoreverses: false), value: isAnimating)
+    }
+    
+    private func sunRay(at index: Int) -> some View {
+        Rectangle()
+            .fill(Color.yellow.opacity(0.9))
+            .frame(width: 4, height: size * 0.25)
+            .offset(y: -size * 0.45)
+            .rotationEffect(.degrees(Double(index) * 45))
+    }
+    
+    private var sunGradient: RadialGradient {
+        RadialGradient(
+            colors: [Color.yellow, Color.orange],
+            center: .center,
+            startRadius: size * 0.1,
+            endRadius: size * 0.35
+        )
+    }
+}
+
+struct ImprovedCloudIcon: View {
+    let size: CGFloat
+    let isAnimating: Bool
+    
+    var body: some View {
+        ZStack {
+            mainCloud
+            cloudBump1
+            cloudBump2
+            cloudBump3
+        }
+        .scaleEffect(isAnimating ? 1.05 : 1.0)
+        .opacity(isAnimating ? 0.9 : 1.0)
+    }
+    
+    private var mainCloud: some View {
+        RoundedRectangle(cornerRadius: size * 0.25)
+            .fill(Color.white.opacity(0.95))
+            .frame(width: size * 0.9, height: size * 0.5)
+    }
+    
+    private var cloudBump1: some View {
+        Circle()
+            .fill(Color.white.opacity(0.95))
+            .frame(width: size * 0.35, height: size * 0.35)
+            .offset(x: -size * 0.2, y: -size * 0.15)
+    }
+    
+    private var cloudBump2: some View {
+        Circle()
+            .fill(Color.white.opacity(0.95))
+            .frame(width: size * 0.45, height: size * 0.45)
+            .offset(x: size * 0.1, y: -size * 0.2)
+    }
+    
+    private var cloudBump3: some View {
+        Circle()
+            .fill(Color.white.opacity(0.95))
+            .frame(width: size * 0.3, height: size * 0.3)
+            .offset(x: size * 0.25, y: -size * 0.05)
+    }
+}
+
+struct ImprovedRainIcon: View {
+    let size: CGFloat
+    let isAnimating: Bool
+    
+    var body: some View {
+        ZStack {
+            ImprovedCloudIcon(size: size * 0.85, isAnimating: isAnimating)
+            
+            VStack(spacing: 6) {
+                ForEach(0..<4, id: \.self) { index in
+                    rainDrop(at: index)
+                }
+            }
+        }
+    }
+    
+    private func rainDrop(at index: Int) -> some View {
+        Rectangle()
+            .fill(Color.blue.opacity(0.8))
+            .frame(width: 3, height: size * 0.18)
+            .offset(x: CGFloat(Double(index) - 1.5) * 10, y: size * 0.25)
+            .offset(y: isAnimating ? 15 : 0)
+            .animation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true).delay(Double(index) * 0.15), value: isAnimating)
+    }
+}
+
+struct ImprovedSnowIcon: View {
+    let size: CGFloat
+    let isAnimating: Bool
+    
+    var body: some View {
+        ZStack {
+            ImprovedCloudIcon(size: size * 0.85, isAnimating: isAnimating)
+            
+            ForEach(0..<8, id: \.self) { index in
+                snowFlake(at: index)
+            }
+        }
+    }
+    
+    private func snowFlake(at index: Int) -> some View {
+        Circle()
+            .fill(Color.white)
+            .frame(width: 5, height: 5)
+            .offset(
+                x: CGFloat(Double(index % 4) - 1.5) * 15,
+                y: CGFloat(index / 4) * 15 + size * 0.25
+            )
+            .offset(y: isAnimating ? 20 : 0)
+            .animation(.easeInOut(duration: 2).repeatForever(autoreverses: true).delay(Double(index) * 0.1), value: isAnimating)
+    }
+}
+
+// MARK: - Improved Travel Comfort
+struct ImprovedTravelComfort: View {
+    let score: Double
+    @EnvironmentObject var viewModel: WeatherViewModel
+    
+    var body: some View {
+        VStack(spacing: 16) {
+            comfortHeader
+            comfortMeter
+        }
+        .padding(.horizontal, 4)
+    }
+    
+    private var comfortHeader: some View {
+        HStack {
+            HStack(spacing: 8) {
+                Image(systemName: "airplane.departure")
+                    .font(.title3)
+                    .foregroundColor(.white.opacity(0.9))
+                
+                Text("CONFORT VOYAGE")
+                    .font(.subheadline)
+                    .fontWeight(.bold)
+                    .foregroundColor(.white.opacity(0.8))
+                    .tracking(1)
+            }
+            
+            Spacer()
+            
+            Text(viewModel.getComfortDescription(score: score))
+                .font(.headline)
+                .fontWeight(.semibold)
+                .foregroundColor(.white)
+        }
+    }
+    
+    private var comfortMeter: some View {
+        GeometryReader { geometry in
+            ZStack(alignment: .leading) {
+                backgroundMeter
+                progressMeter(width: geometry.size.width)
+                scoreIndicator(width: geometry.size.width)
+            }
+        }
+        .frame(height: 16)
+    }
+    
+    private var backgroundMeter: some View {
+        RoundedRectangle(cornerRadius: 8)
+            .fill(.white.opacity(0.25))
+            .frame(height: 16)
+    }
+    
+    private func progressMeter(width: CGFloat) -> some View {
+        RoundedRectangle(cornerRadius: 8)
+            .fill(comfortGradient)
+            .frame(width: width * score, height: 16)
+            .animation(.easeInOut(duration: 1.5), value: score)
+    }
+    
+    private func scoreIndicator(width: CGFloat) -> some View {
+        Circle()
+            .fill(.white)
+            .frame(width: 20, height: 20)
+            .offset(x: (width * score) - 10)
+            .shadow(color: .black.opacity(0.3), radius: 4)
+            .animation(.easeInOut(duration: 1.5), value: score)
+    }
+    
+    private var comfortGradient: LinearGradient {
+        LinearGradient(
+            colors: comfortGradientColors,
+            startPoint: .leading,
+            endPoint: .trailing
+        )
+    }
+    
+    private var comfortGradientColors: [Color] {
+        switch score {
+        case 0.8...1.0: return [.green, .green.opacity(0.8)]
+        case 0.6..<0.8: return [.yellow, .yellow.opacity(0.8)]
+        case 0.4..<0.6: return [.orange, .orange.opacity(0.8)]
+        default: return [.red, .red.opacity(0.8)]
+        }
+    }
+}
+
+// MARK: - Placeholder Components (à développer)
+struct IntelligentLocationPickerSheet: View {
+    var body: some View {
+        LocationPickerSheet() // Utilise temporairement l'ancien
+    }
+}
+
+struct ImprovedWeatherMetricsGrid: View {
+    let weather: WeatherData
+    
+    var body: some View {
+        WeatherMetricsGrid(weather: weather) // Utilise temporairement l'ancien
+    }
+}
+
+struct ImprovedForecastSection: View {
+    let weather: WeatherData
+    
+    var body: some View {
+        PremiumForecastSection(weather: weather) // Utilise temporairement l'ancien
+    }
+}
+
+struct TravelInsightsCard: View {
+    let weather: WeatherData
+    
+    var body: some View {
+        EmptyView() // À développer
+    }
+}
+
+struct ImprovedPremiumShowcase: View {
+    var body: some View {
+        PremiumShowcaseCard() // Utilise temporairement l'ancien
+    }
+}
+
+struct ImprovedLoadingCard: View {
+    var body: some View {
+        LoadingWeatherCard() // Utilise temporairement l'ancien
+    }
+}
+
+struct ImprovedLocationSetupCard: View {
+    var body: some View {
+        LocationSetupCard() // Utilise temporairement l'ancien
+    }
+}
+
+// MARK: - Keep existing background animations
 struct WeatherAnimatedBackground: View {
     let weather: WeatherData?
     @State private var cloudOffset1: CGFloat = -100
@@ -143,18 +881,16 @@ struct WeatherAnimatedBackground: View {
     }
 }
 
-// MARK: - Weather Animations (Simplified)
+// Garder les autres composants d'animation existants...
 struct SunAnimation: View {
     let rotation: Double
     
     var body: some View {
         ZStack {
-            // Sun rays - simplified
             ForEach(0..<8, id: \.self) { index in
                 sunRay(at: index)
             }
             
-            // Sun circle
             Circle()
                 .fill(sunGradient)
                 .frame(width: 100, height: 100)
@@ -308,422 +1044,7 @@ struct CloudShape: Shape {
     }
 }
 
-// MARK: - Hero Weather Card
-struct HeroWeatherCard: View {
-    let weather: WeatherData
-    @EnvironmentObject var viewModel: WeatherViewModel
-    
-    var body: some View {
-        VStack(spacing: 0) {
-            LocationHeader(location: weather.location)
-            
-            VStack(spacing: 24) {
-                temperatureDisplay
-                
-                if let todayForecast = weather.forecast.first {
-                    TravelComfortIndicator(score: todayForecast.comfortScore)
-                }
-            }
-            .padding(.horizontal, 24)
-            .padding(.vertical, 32)
-        }
-        .background(heroCardBackground)
-        .shadow(color: .black.opacity(0.2), radius: 20, y: 10)
-    }
-    
-    @ViewBuilder
-    private var temperatureDisplay: some View {
-        HStack(alignment: .center, spacing: 20) {
-            VStack(alignment: .leading, spacing: 8) {
-                temperatureText
-                conditionDescription
-                feelsLikeText
-            }
-            
-            Spacer()
-            
-            AnimatedWeatherIcon(condition: weather.current.condition.main, size: 80)
-        }
-    }
-    
-    private var temperatureText: some View {
-        Text(viewModel.formatTemperature(weather.current.temperature))
-            .font(.system(size: 72, weight: .thin, design: .rounded))
-            .foregroundStyle(temperatureGradient)
-    }
-    
-    private var conditionDescription: some View {
-        Text(weather.current.condition.description.capitalized)
-            .font(.title2)
-            .foregroundColor(.white.opacity(0.9))
-    }
-    
-    private var feelsLikeText: some View {
-        Text("Ressenti \(viewModel.formatTemperature(weather.current.feelsLike))")
-            .font(.subheadline)
-            .foregroundColor(.white.opacity(0.7))
-    }
-    
-    private var temperatureGradient: LinearGradient {
-        LinearGradient(
-            colors: [.white, .white.opacity(0.8)],
-            startPoint: .top,
-            endPoint: .bottom
-        )
-    }
-    
-    private var heroCardBackground: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 24)
-                .fill(.ultraThinMaterial)
-                .environment(\.colorScheme, .dark)
-            
-            RoundedRectangle(cornerRadius: 24)
-                .fill(premiumGradientOverlay)
-            
-            RoundedRectangle(cornerRadius: 24)
-                .stroke(borderGradient, lineWidth: 1)
-        }
-    }
-    
-    private var premiumGradientOverlay: LinearGradient {
-        LinearGradient(
-            colors: [
-                .premiumOrange.opacity(0.2),
-                .premiumGradientEnd.opacity(0.1),
-                .clear
-            ],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
-    }
-    
-    private var borderGradient: LinearGradient {
-        LinearGradient(
-            colors: [.white.opacity(0.3), .clear],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
-    }
-}
-
-// MARK: - Location Header
-struct LocationHeader: View {
-    let location: Location
-    @EnvironmentObject var viewModel: WeatherViewModel
-    @State private var isLocationPulsing = false
-    
-    var body: some View {
-        HStack(spacing: 12) {
-            locationIndicator
-            
-            VStack(alignment: .leading, spacing: 4) {
-                positionLabel
-                locationName
-            }
-            
-            Spacer()
-            
-            favoriteButton
-        }
-        .padding(.horizontal, 24)
-        .padding(.top, 20)
-        .onAppear {
-            isLocationPulsing = true
-        }
-    }
-    
-    private var locationIndicator: some View {
-        ZStack {
-            Circle()
-                .fill(pulsingGradient)
-                .frame(width: 50, height: 50)
-                .animation(.easeInOut(duration: 2).repeatForever(autoreverses: true), value: isLocationPulsing)
-            
-            Image(systemName: "location.fill")
-                .font(.title2)
-                .foregroundStyle(locationIconGradient)
-        }
-    }
-    
-    private var positionLabel: some View {
-        Text("VOTRE POSITION")
-            .font(.caption)
-            .fontWeight(.medium)
-            .foregroundColor(.white.opacity(0.6))
-            .tracking(1)
-    }
-    
-    private var locationName: some View {
-        Text(location.name)
-            .font(.title)
-            .fontWeight(.semibold)
-            .foregroundColor(.white)
-    }
-    
-    private var favoriteButton: some View {
-        Button(action: {
-            viewModel.toggleFavorite(for: location)
-        }) {
-            Image(systemName: viewModel.isFavorite(location) ? "heart.fill" : "heart")
-                .font(.title2)
-                .foregroundColor(viewModel.isFavorite(location) ? .premiumOrange : .white.opacity(0.6))
-                .scaleEffect(viewModel.isFavorite(location) ? 1.2 : 1.0)
-                .animation(.spring(response: 0.5, dampingFraction: 0.6), value: viewModel.isFavorite(location))
-        }
-    }
-    
-    private var pulsingGradient: RadialGradient {
-        RadialGradient(
-            colors: [.premiumOrange.opacity(0.3), .clear],
-            center: .center,
-            startRadius: 5,
-            endRadius: isLocationPulsing ? 25 : 15
-        )
-    }
-    
-    private var locationIconGradient: LinearGradient {
-        LinearGradient(
-            colors: [.premiumOrange, .premiumGradientEnd],
-            startPoint: .top,
-            endPoint: .bottom
-        )
-    }
-}
-
-// MARK: - Animated Weather Icon
-struct AnimatedWeatherIcon: View {
-    let condition: String
-    let size: CGFloat
-    @State private var isAnimating = false
-    
-    var body: some View {
-        iconForCondition
-            .onAppear {
-                withAnimation(.easeInOut(duration: 2).repeatForever(autoreverses: true)) {
-                    isAnimating = true
-                }
-            }
-    }
-    
-    @ViewBuilder
-    private var iconForCondition: some View {
-        switch condition.lowercased() {
-        case "clear":
-            SunIcon(size: size, isAnimating: isAnimating)
-        case "clouds":
-            CloudIcon(size: size, isAnimating: isAnimating)
-        case "rain", "drizzle":
-            RainIcon(size: size, isAnimating: isAnimating)
-        case "snow":
-            SnowIcon(size: size, isAnimating: isAnimating)
-        default:
-            CloudIcon(size: size, isAnimating: isAnimating)
-        }
-    }
-}
-
-struct SunIcon: View {
-    let size: CGFloat
-    let isAnimating: Bool
-    
-    var body: some View {
-        ZStack {
-            ForEach(0..<8, id: \.self) { index in
-                sunRay(at: index)
-            }
-            
-            Circle()
-                .fill(sunGradient)
-                .frame(width: size * 0.6, height: size * 0.6)
-                .shadow(color: .yellow.opacity(0.5), radius: isAnimating ? 15 : 10)
-        }
-        .rotationEffect(.degrees(isAnimating ? 360 : 0))
-        .animation(.linear(duration: 8).repeatForever(autoreverses: false), value: isAnimating)
-    }
-    
-    private func sunRay(at index: Int) -> some View {
-        Rectangle()
-            .fill(Color.yellow.opacity(0.8))
-            .frame(width: 3, height: size * 0.2)
-            .offset(y: -size * 0.4)
-            .rotationEffect(.degrees(Double(index) * 45))
-    }
-    
-    private var sunGradient: RadialGradient {
-        RadialGradient(
-            colors: [Color.yellow, Color.orange],
-            center: .center,
-            startRadius: size * 0.1,
-            endRadius: size * 0.3
-        )
-    }
-}
-
-struct CloudIcon: View {
-    let size: CGFloat
-    let isAnimating: Bool
-    
-    var body: some View {
-        ZStack {
-            mainCloud
-            cloudBump1
-            cloudBump2
-        }
-        .scaleEffect(isAnimating ? 1.1 : 1.0)
-        .opacity(isAnimating ? 0.8 : 1.0)
-    }
-    
-    private var mainCloud: some View {
-        RoundedRectangle(cornerRadius: size * 0.2)
-            .fill(Color.white.opacity(0.9))
-            .frame(width: size * 0.8, height: size * 0.4)
-    }
-    
-    private var cloudBump1: some View {
-        Circle()
-            .fill(Color.white.opacity(0.9))
-            .frame(width: size * 0.3, height: size * 0.3)
-            .offset(x: -size * 0.15, y: -size * 0.1)
-    }
-    
-    private var cloudBump2: some View {
-        Circle()
-            .fill(Color.white.opacity(0.9))
-            .frame(width: size * 0.4, height: size * 0.4)
-            .offset(x: size * 0.1, y: -size * 0.15)
-    }
-}
-
-struct RainIcon: View {
-    let size: CGFloat
-    let isAnimating: Bool
-    
-    var body: some View {
-        ZStack {
-            CloudIcon(size: size * 0.8, isAnimating: isAnimating)
-            
-            VStack(spacing: 4) {
-                ForEach(0..<3, id: \.self) { index in
-                    rainDrop(at: index)
-                }
-            }
-        }
-    }
-    
-    private func rainDrop(at index: Int) -> some View {
-        Rectangle()
-            .fill(Color.blue.opacity(0.7))
-            .frame(width: 2, height: size * 0.15)
-            .offset(x: CGFloat(index - 1) * 8, y: size * 0.2)
-            .offset(y: isAnimating ? 10 : 0)
-            .animation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true).delay(Double(index) * 0.2), value: isAnimating)
-    }
-}
-
-struct SnowIcon: View {
-    let size: CGFloat
-    let isAnimating: Bool
-    
-    var body: some View {
-        ZStack {
-            CloudIcon(size: size * 0.8, isAnimating: isAnimating)
-            
-            ForEach(0..<6, id: \.self) { index in
-                snowFlake(at: index)
-            }
-        }
-    }
-    
-    private func snowFlake(at index: Int) -> some View {
-        Circle()
-            .fill(Color.white)
-            .frame(width: 4, height: 4)
-            .offset(
-                x: CGFloat(index % 3 - 1) * 12,
-                y: CGFloat(index / 3) * 12 + size * 0.2
-            )
-            .offset(y: isAnimating ? 15 : 0)
-            .animation(.easeInOut(duration: 1.5).repeatForever(autoreverses: true).delay(Double(index) * 0.1), value: isAnimating)
-    }
-}
-
-// MARK: - Travel Comfort Indicator
-struct TravelComfortIndicator: View {
-    let score: Double
-    @EnvironmentObject var viewModel: WeatherViewModel
-    
-    var body: some View {
-        VStack(spacing: 12) {
-            comfortHeader
-            comfortProgressBar
-        }
-        .padding(.horizontal, 4)
-    }
-    
-    private var comfortHeader: some View {
-        HStack {
-            Image(systemName: "airplane.departure")
-                .font(.title3)
-                .foregroundColor(.white.opacity(0.8))
-            
-            Text("CONFORT VOYAGE")
-                .font(.caption)
-                .fontWeight(.medium)
-                .foregroundColor(.white.opacity(0.6))
-                .tracking(1)
-            
-            Spacer()
-            
-            Text(viewModel.getComfortDescription(score: score))
-                .font(.subheadline)
-                .fontWeight(.medium)
-                .foregroundColor(.white)
-        }
-    }
-    
-    private var comfortProgressBar: some View {
-        GeometryReader { geometry in
-            ZStack(alignment: .leading) {
-                backgroundBar
-                progressBar(width: geometry.size.width)
-            }
-        }
-        .frame(height: 12)
-    }
-    
-    private var backgroundBar: some View {
-        RoundedRectangle(cornerRadius: 6)
-            .fill(.white.opacity(0.2))
-            .frame(height: 12)
-    }
-    
-    private func progressBar(width: CGFloat) -> some View {
-        RoundedRectangle(cornerRadius: 6)
-            .fill(comfortGradient)
-            .frame(width: width * score, height: 12)
-            .animation(.easeInOut(duration: 1), value: score)
-    }
-    
-    private var comfortGradient: LinearGradient {
-        LinearGradient(
-            colors: comfortGradientColors,
-            startPoint: .leading,
-            endPoint: .trailing
-        )
-    }
-    
-    private var comfortGradientColors: [Color] {
-        switch score {
-        case 0.8...1.0: return [.green, .green.opacity(0.7)]
-        case 0.6..<0.8: return [.yellow, .yellow.opacity(0.7)]
-        case 0.4..<0.6: return [.premiumOrange, .premiumOrange.opacity(0.7)]
-        default: return [.red, .red.opacity(0.7)]
-        }
-    }
-}
-
-// MARK: - Weather Metrics Grid
+// Garder les composants existants temporairement
 struct WeatherMetricsGrid: View {
     let weather: WeatherData
     @EnvironmentObject var viewModel: WeatherViewModel
@@ -819,7 +1140,6 @@ struct WeatherMetricCard: View {
     }
 }
 
-// MARK: - Premium Forecast Section
 struct PremiumForecastSection: View {
     let weather: WeatherData
     @EnvironmentObject var premiumManager: PremiumManager
@@ -916,7 +1236,8 @@ struct PremiumForecastCard: View {
     }
     
     private var weatherIcon: some View {
-        AnimatedWeatherIcon(condition: forecast.condition.main, size: 40)
+        Text(forecast.condition.emoji)
+            .font(.title2)
     }
     
     private var temperatureInfo: some View {
@@ -980,7 +1301,7 @@ struct PremiumForecastCard: View {
         switch score {
         case 0.8...1.0: return .green
         case 0.6..<0.8: return .yellow
-        case 0.4..<0.6: return .premiumOrange
+        case 0.4..<0.6: return .orange
         default: return .red
         }
     }
@@ -1046,7 +1367,7 @@ struct UnlockMoreForecastCard: View {
     private var unlockButton: some View {
         Text("Débloquer")
             .font(.caption)
-            .foregroundColor(.premiumOrange)
+            .foregroundColor(.orange)
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
             .background(unlockButtonBackground)
@@ -1054,7 +1375,7 @@ struct UnlockMoreForecastCard: View {
     
     private var premiumIconGradient: RadialGradient {
         RadialGradient(
-            colors: [.premiumOrange.opacity(0.3), .clear],
+            colors: [.orange.opacity(0.3), .clear],
             center: .center,
             startRadius: 10,
             endRadius: isGlowing ? 30 : 20
@@ -1063,7 +1384,7 @@ struct UnlockMoreForecastCard: View {
     
     private var crownGradient: LinearGradient {
         LinearGradient(
-            colors: [.premiumOrange, .premiumGradientEnd],
+            colors: [.orange, .red],
             startPoint: .top,
             endPoint: .bottom
         )
@@ -1071,7 +1392,7 @@ struct UnlockMoreForecastCard: View {
     
     private var premiumTextGradient: LinearGradient {
         LinearGradient(
-            colors: [.premiumOrange, .premiumGradientEnd],
+            colors: [.orange, .red],
             startPoint: .leading,
             endPoint: .trailing
         )
@@ -1079,10 +1400,10 @@ struct UnlockMoreForecastCard: View {
     
     private var unlockButtonBackground: some View {
         Capsule()
-            .fill(Color.premiumOrange.opacity(0.1))
+            .fill(Color.orange.opacity(0.1))
             .overlay(
                 Capsule()
-                    .stroke(Color.premiumOrange.opacity(0.3), lineWidth: 1)
+                    .stroke(Color.orange.opacity(0.3), lineWidth: 1)
             )
     }
     
@@ -1097,14 +1418,13 @@ struct UnlockMoreForecastCard: View {
     
     private var premiumCardBorder: LinearGradient {
         LinearGradient(
-            colors: [.premiumOrange.opacity(0.3), .premiumGradientEnd.opacity(0.3)],
+            colors: [.orange.opacity(0.3), .red.opacity(0.3)],
             startPoint: .topLeading,
             endPoint: .bottomTrailing
         )
     }
 }
 
-// MARK: - Premium Showcase Card
 struct PremiumShowcaseCard: View {
     @EnvironmentObject var viewModel: WeatherViewModel
     @State private var currentFeatureIndex = 0
@@ -1133,7 +1453,7 @@ struct PremiumShowcaseCard: View {
             icon: "location.fill",
             title: "Destinations illimitées",
             description: "Comparez autant que vous voulez",
-            color: .premiumOrange
+            color: .orange
         )
     ]
     
@@ -1198,7 +1518,7 @@ struct PremiumShowcaseCard: View {
         HStack(spacing: 8) {
             ForEach(0..<premiumFeatures.count, id: \.self) { index in
                 Circle()
-                    .fill(index == currentFeatureIndex ? Color.premiumOrange : .gray.opacity(0.3))
+                    .fill(index == currentFeatureIndex ? Color.orange : .gray.opacity(0.3))
                     .frame(width: 8, height: 8)
                     .scaleEffect(index == currentFeatureIndex ? 1.2 : 1.0)
                     .animation(.easeInOut(duration: 0.3), value: currentFeatureIndex)
@@ -1223,13 +1543,13 @@ struct PremiumShowcaseCard: View {
             .frame(maxWidth: .infinity)
             .background(ctaButtonGradient)
             .cornerRadius(16)
-            .shadow(color: .premiumOrange.opacity(0.3), radius: 10, y: 5)
+            .shadow(color: .orange.opacity(0.3), radius: 10, y: 5)
         }
     }
     
     private var premiumIconGradient: RadialGradient {
         RadialGradient(
-            colors: [.premiumOrange.opacity(0.3), .clear],
+            colors: [.orange.opacity(0.3), .clear],
             center: .center,
             startRadius: 10,
             endRadius: isAnimating ? 25 : 15
@@ -1238,7 +1558,7 @@ struct PremiumShowcaseCard: View {
     
     private var crownGradient: LinearGradient {
         LinearGradient(
-            colors: [.premiumOrange, .premiumGradientEnd],
+            colors: [.orange, .red],
             startPoint: .top,
             endPoint: .bottom
         )
@@ -1246,7 +1566,7 @@ struct PremiumShowcaseCard: View {
     
     private var ctaButtonGradient: LinearGradient {
         LinearGradient(
-            colors: [.premiumOrange, .premiumGradientEnd],
+            colors: [.orange, .red],
             startPoint: .leading,
             endPoint: .trailing
         )
@@ -1263,7 +1583,7 @@ struct PremiumShowcaseCard: View {
     
     private var showcaseBorder: LinearGradient {
         LinearGradient(
-            colors: [.premiumOrange.opacity(0.3), .clear],
+            colors: [.orange.opacity(0.3), .clear],
             startPoint: .topLeading,
             endPoint: .bottomTrailing
         )
@@ -1285,51 +1605,6 @@ struct PremiumFeatureDisplay {
     let color: Color
 }
 
-//struct PremiumFeatureCard: View {
-//    let feature: PremiumFeatureDisplay
-//    
-//    var body: some View {
-//        HStack(spacing: 16) {
-//            featureIcon
-//            featureInfo
-//            Spacer()
-//        }
-//        .padding(16)
-//        .background(featureCardBackground)
-//        .cornerRadius(12)
-//    }
-//    
-//    private var featureIcon: some View {
-//        ZStack {
-//            Circle()
-//                .fill(feature.color.opacity(0.2))
-//                .frame(width: 50, height: 50)
-//            
-//            Image(systemName: feature.icon)
-//                .font(.title2)
-//                .foregroundColor(feature.color)
-//        }
-//    }
-//    
-//    private var featureInfo: some View {
-//        VStack(alignment: .leading, spacing: 4) {
-//            Text(feature.title)
-//                .font(.headline)
-//                .fontWeight(.semibold)
-//            
-//            Text(feature.description)
-//                .font(.subheadline)
-//                .foregroundColor(.secondary)
-//        }
-//    }
-//    
-//    private var featureCardBackground: some View {
-//        RoundedRectangle(cornerRadius: 12)
-//            .fill(Color.primary.opacity(0.05))
-//    }
-//}
-
-// MARK: - Badges
 struct PremiumBadge: View {
     let text: String
     
@@ -1346,7 +1621,7 @@ struct PremiumBadge: View {
     
     private var premiumBadgeGradient: LinearGradient {
         LinearGradient(
-            colors: [.premiumOrange, .premiumGradientEnd],
+            colors: [.orange, .red],
             startPoint: .leading,
             endPoint: .trailing
         )
@@ -1368,7 +1643,6 @@ struct FreeBadge: View {
     }
 }
 
-// MARK: - Loading and Setup Cards
 struct LoadingWeatherCard: View {
     @State private var isAnimating = false
     
@@ -1415,7 +1689,7 @@ struct LoadingWeatherCard: View {
     
     private var loadingGradient: LinearGradient {
         LinearGradient(
-            colors: [.premiumOrange, .premiumGradientEnd],
+            colors: [.orange, .red],
             startPoint: .leading,
             endPoint: .trailing
         )
@@ -1536,13 +1810,13 @@ struct LocationSetupCard: View {
             viewModel.simulateLocationUpdate(latitude: lat, longitude: lon, name: city)
         }
         .font(.caption)
-        .foregroundColor(.premiumOrange)
+        .foregroundColor(.orange)
     }
     #endif
     
     private var locationIconGradient: LinearGradient {
         LinearGradient(
-            colors: [.premiumOrange, .premiumGradientEnd],
+            colors: [.orange, .red],
             startPoint: .top,
             endPoint: .bottom
         )
@@ -1550,7 +1824,7 @@ struct LocationSetupCard: View {
     
     private var locationButtonGradient: LinearGradient {
         LinearGradient(
-            colors: [.premiumOrange, .premiumGradientEnd],
+            colors: [.orange, .red],
             startPoint: .leading,
             endPoint: .trailing
         )
@@ -1566,4 +1840,10 @@ struct LocationSetupCard: View {
             .fill(.ultraThinMaterial)
             .environment(\.colorScheme, .dark)
     }
+}
+
+#Preview {
+    WeatherView()
+        .environmentObject(WeatherViewModel())
+        .environmentObject(PremiumManager.shared)
 }

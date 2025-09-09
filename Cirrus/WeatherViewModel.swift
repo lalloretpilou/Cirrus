@@ -10,11 +10,16 @@ class WeatherViewModel: NSObject, ObservableObject {
     @Published var currentWeather: WeatherData?
     @Published var favoriteLocations: [Location] = []
     @Published var searchResults: [Location] = []
+    @Published var intelligentSuggestions: [LocationSuggestion] = []
     @Published var isLoading = false
     @Published var errorMessage: String?
     @Published var searchText = ""
     @Published var showingLocationPicker = false
     @Published var showingPremiumSheet = false
+    
+    // Location display
+    @Published var resolvedLocationName: String = ""
+    @Published var isResolvingLocation = false
     
     // Comparison feature
     @Published var selectedLocationsForComparison: [Location] = []
@@ -25,7 +30,7 @@ class WeatherViewModel: NSObject, ObservableObject {
     @Published var currentTrip: Trip?
     @Published var plannedTrips: [Trip] = []
     
-    // User location - Corrigé pour éviter les warnings CoreLocation
+    // User location
     @Published var userLocation: CLLocation?
     @Published var locationPermissionStatus: CLAuthorizationStatus = .notDetermined
     @Published var isRequestingLocation = false
@@ -35,10 +40,12 @@ class WeatherViewModel: NSObject, ObservableObject {
     private let weatherService = WeatherService.shared
     private let premiumManager = PremiumManager.shared
     private let locationManager = CLLocationManager()
+    private let geocoder = CLGeocoder()
     private let userDefaults = UserDefaults.standard
     
     // MARK: - Combine
     private var cancellables = Set<AnyCancellable>()
+    private var geocodingTask: Task<Void, Never>?
     
     // MARK: - Constants
     private let maxFreeDestinations = 3
@@ -51,6 +58,7 @@ class WeatherViewModel: NSObject, ObservableObject {
         setupBindings()
         loadFavoriteLocations()
         loadPlannedTrips()
+        generateIntelligentSuggestions()
     }
     
     // MARK: - Setup
@@ -66,10 +74,6 @@ class WeatherViewModel: NSObject, ObservableObject {
     func checkInitialLocationStatus() {
         print("🔍 Checking initial location status...")
         
-        // Ne pas appeler authorizationStatus sur le main thread
-        // Le statut sera obtenu via le delegate automatiquement
-        
-        // Si on n'a pas de position après quelques secondes, utiliser la position par défaut
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
             guard let self = self else { return }
             
@@ -91,7 +95,6 @@ class WeatherViewModel: NSObject, ObservableObject {
         isRequestingLocation = true
         locationManager.startUpdatingLocation()
         
-        // Arrêter après 10 secondes max pour économiser la batterie
         DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
             self?.stopLocationUpdates()
         }
@@ -104,9 +107,9 @@ class WeatherViewModel: NSObject, ObservableObject {
     }
     
     private func setDefaultLocation() {
-        // Position par défaut : Paris
         let defaultLocation = CLLocation(latitude: 48.8566, longitude: 2.3522)
         userLocation = defaultLocation
+        resolvedLocationName = "Paris" // Nom par défaut
         print("🏙️ Using default location: Paris")
         
         Task {
@@ -115,23 +118,263 @@ class WeatherViewModel: NSObject, ObservableObject {
     }
     
     private func setupBindings() {
-        // Search text binding with debounce
         $searchText
             .debounce(for: .milliseconds(500), scheduler: RunLoop.main)
             .removeDuplicates()
             .sink { [weak self] searchText in
                 Task {
-                    await self?.searchLocations(query: searchText)
+                    await self?.performIntelligentSearch(query: searchText)
                 }
             }
             .store(in: &cancellables)
         
-        // Premium status changes
         premiumManager.$isPremium
             .sink { [weak self] isPremium in
                 self?.handlePremiumStatusChange(isPremium)
             }
             .store(in: &cancellables)
+    }
+    
+    // MARK: - Enhanced Location Resolution
+    
+    private func resolveLocationName(for coordinates: CLLocationCoordinate2D) async {
+        print("🌍 Resolving location name for coordinates: \(coordinates.latitude), \(coordinates.longitude)")
+        
+        isResolvingLocation = true
+        
+        // Annuler la tâche précédente si elle existe
+        geocodingTask?.cancel()
+        
+        geocodingTask = Task {
+            let location = CLLocation(latitude: coordinates.latitude, longitude: coordinates.longitude)
+            
+            do {
+                let placemarks = try await geocoder.reverseGeocodeLocation(location)
+                
+                guard !Task.isCancelled else { return }
+                
+                await MainActor.run {
+                    if let placemark = placemarks.first {
+                        self.resolvedLocationName = self.formatLocationName(from: placemark)
+                        print("✅ Resolved location name: \(self.resolvedLocationName)")
+                    } else {
+                        self.resolvedLocationName = "Position actuelle"
+                    }
+                    self.isResolvingLocation = false
+                }
+            } catch {
+                await MainActor.run {
+                    self.resolvedLocationName = "Position actuelle"
+                    self.isResolvingLocation = false
+                    print("❌ Geocoding error: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+    
+    private func formatLocationName(from placemark: CLPlacemark) -> String {
+        // Ordre de priorité pour le nom de lieu
+        if let locality = placemark.locality {
+            return locality
+        } else if let subAdministrativeArea = placemark.subAdministrativeArea {
+            return subAdministrativeArea
+        } else if let administrativeArea = placemark.administrativeArea {
+            return administrativeArea
+        } else if let country = placemark.country {
+            return country
+        } else {
+            return "Position actuelle"
+        }
+    }
+    
+    // MARK: - Intelligent Search
+    
+    private func performIntelligentSearch(query: String) async {
+        guard !query.isEmpty else {
+            searchResults = []
+            return
+        }
+        
+        print("🔍 Performing intelligent search for: \(query)")
+        
+        do {
+            // Recherche normale
+            let normalResults = try await weatherService.searchLocations(query: query)
+            
+            // Recherche contextuelle
+            let contextualResults = await getContextualSuggestions(for: query)
+            
+            // Combiner et déduplicquer
+            var combinedResults = normalResults
+            
+            for suggestion in contextualResults {
+                if !combinedResults.contains(where: { $0.name.lowercased() == suggestion.name.lowercased() }) {
+                    combinedResults.append(suggestion)
+                }
+            }
+            
+            searchResults = Array(combinedResults.prefix(8)) // Limiter à 8 résultats
+            
+        } catch {
+            print("Search error: \(error)")
+            searchResults = []
+        }
+    }
+    
+    private func getContextualSuggestions(for query: String) async -> [Location] {
+        let queryLower = query.lowercased()
+        var suggestions: [Location] = []
+        
+        // Suggestions basées sur la proximité géographique
+        if let userLocation = userLocation {
+            suggestions.append(contentsOf: getNearbyDestinations(from: userLocation, matching: queryLower))
+        }
+        
+        // Suggestions saisonnières
+        suggestions.append(contentsOf: getSeasonalSuggestions(matching: queryLower))
+        
+        // Suggestions par type de voyage
+        suggestions.append(contentsOf: getTravelTypeSuggestions(matching: queryLower))
+        
+        return suggestions
+    }
+    
+    private func getNearbyDestinations(from location: CLLocation, matching query: String) -> [Location] {
+        let nearbyDestinations = [
+            ("Nice", 43.7102, 7.2620),
+            ("Marseille", 43.2965, 5.3698),
+            ("Lyon", 45.7640, 4.8357),
+            ("Bordeaux", 44.8378, -0.5792),
+            ("Toulouse", 43.6047, 1.4442),
+            ("Strasbourg", 48.5734, 7.7521),
+            ("Nantes", 47.2184, -1.5536),
+            ("Lille", 50.6292, 3.0573)
+        ]
+        
+        return nearbyDestinations.compactMap { (name, lat, lon) in
+            if name.lowercased().contains(query) || query.contains(name.lowercased()) {
+                return Location(
+                    name: name,
+                    country: "France",
+                    coordinates: Location.Coordinates(latitude: lat, longitude: lon),
+                    timezone: "Europe/Paris",
+                    isFavorite: false,
+                    isPremium: false
+                )
+            }
+            return nil
+        }
+    }
+    
+    private func getSeasonalSuggestions(matching query: String) -> [Location] {
+        let month = Calendar.current.component(.month, from: Date())
+        let seasonalDestinations = getSeasonalDestinations(for: month)
+        
+        return seasonalDestinations.compactMap { destination in
+            if destination.name.lowercased().contains(query) || query.contains(destination.name.lowercased()) {
+                return destination
+            }
+            return nil
+        }
+    }
+    
+    private func getTravelTypeSuggestions(matching query: String) -> [Location] {
+        let travelTypes: [String: [Location]] = [
+            "plage": [
+                Location(name: "Nice", country: "France", coordinates: Location.Coordinates(latitude: 43.7102, longitude: 7.2620), timezone: nil, isFavorite: false, isPremium: false),
+                Location(name: "Cannes", country: "France", coordinates: Location.Coordinates(latitude: 43.5528, longitude: 7.0174), timezone: nil, isFavorite: false, isPremium: false)
+            ],
+            "montagne": [
+                Location(name: "Chamonix", country: "France", coordinates: Location.Coordinates(latitude: 45.9237, longitude: 6.8694), timezone: nil, isFavorite: false, isPremium: false),
+                Location(name: "Annecy", country: "France", coordinates: Location.Coordinates(latitude: 45.8992, longitude: 6.1294), timezone: nil, isFavorite: false, isPremium: false)
+            ],
+            "ski": [
+                Location(name: "Val d'Isère", country: "France", coordinates: Location.Coordinates(latitude: 45.4486, longitude: 6.9806), timezone: nil, isFavorite: false, isPremium: false),
+                Location(name: "Courchevel", country: "France", coordinates: Location.Coordinates(latitude: 45.4167, longitude: 6.6333), timezone: nil, isFavorite: false, isPremium: false)
+            ]
+        ]
+        
+        for (type, destinations) in travelTypes {
+            if query.contains(type) {
+                return destinations
+            }
+        }
+        
+        return []
+    }
+    
+    private func getSeasonalDestinations(for month: Int) -> [Location] {
+        switch month {
+        case 12, 1, 2: // Hiver
+            return [
+                Location(name: "Marrakech", country: "Maroc", coordinates: Location.Coordinates(latitude: 31.6295, longitude: -7.9811), timezone: nil, isFavorite: false, isPremium: false),
+                Location(name: "Dubai", country: "Émirats Arabes Unis", coordinates: Location.Coordinates(latitude: 25.2048, longitude: 55.2708), timezone: nil, isFavorite: false, isPremium: false),
+                Location(name: "Bangkok", country: "Thaïlande", coordinates: Location.Coordinates(latitude: 13.7563, longitude: 100.5018), timezone: nil, isFavorite: false, isPremium: false)
+            ]
+        case 3, 4, 5: // Printemps
+            return [
+                Location(name: "Tokyo", country: "Japon", coordinates: Location.Coordinates(latitude: 35.6762, longitude: 139.6503), timezone: nil, isFavorite: false, isPremium: false),
+                Location(name: "Athènes", country: "Grèce", coordinates: Location.Coordinates(latitude: 37.9838, longitude: 23.7275), timezone: nil, isFavorite: false, isPremium: false),
+                Location(name: "Istanbul", country: "Turquie", coordinates: Location.Coordinates(latitude: 41.0082, longitude: 28.9784), timezone: nil, isFavorite: false, isPremium: false)
+            ]
+        case 6, 7, 8: // Été
+            return [
+                Location(name: "Oslo", country: "Norvège", coordinates: Location.Coordinates(latitude: 59.9139, longitude: 10.7522), timezone: nil, isFavorite: false, isPremium: false),
+                Location(name: "Reykjavik", country: "Islande", coordinates: Location.Coordinates(latitude: 64.1466, longitude: -21.9426), timezone: nil, isFavorite: false, isPremium: false),
+                Location(name: "Édimbourg", country: "Écosse", coordinates: Location.Coordinates(latitude: 55.9533, longitude: -3.1883), timezone: nil, isFavorite: false, isPremium: false)
+            ]
+        case 9, 10, 11: // Automne
+            return [
+                Location(name: "Delhi", country: "Inde", coordinates: Location.Coordinates(latitude: 28.7041, longitude: 77.1025), timezone: nil, isFavorite: false, isPremium: false),
+                Location(name: "Katmandou", country: "Népal", coordinates: Location.Coordinates(latitude: 27.7172, longitude: 85.3240), timezone: nil, isFavorite: false, isPremium: false),
+                Location(name: "Amman", country: "Jordanie", coordinates: Location.Coordinates(latitude: 31.9454, longitude: 35.9284), timezone: nil, isFavorite: false, isPremium: false)
+            ]
+        default:
+            return []
+        }
+    }
+    
+    private func generateIntelligentSuggestions() {
+        let currentMonth = Calendar.current.component(.month, from: Date())
+        let seasonalDests = getSeasonalDestinations(for: currentMonth)
+        
+        intelligentSuggestions = seasonalDests.prefix(3).map { destination in
+            LocationSuggestion(
+                location: destination,
+                reason: getSuggestionReason(for: destination, month: currentMonth),
+                priority: .seasonal
+            )
+        }
+        
+        // Ajouter des suggestions populaires
+        let popularDestinations = [
+            Location(name: "Paris", country: "France", coordinates: Location.Coordinates(latitude: 48.8566, longitude: 2.3522), timezone: nil, isFavorite: false, isPremium: false),
+            Location(name: "Londres", country: "Royaume-Uni", coordinates: Location.Coordinates(latitude: 51.5074, longitude: -0.1278), timezone: nil, isFavorite: false, isPremium: false),
+            Location(name: "New York", country: "États-Unis", coordinates: Location.Coordinates(latitude: 40.7128, longitude: -74.0060), timezone: nil, isFavorite: false, isPremium: false)
+        ]
+        
+        intelligentSuggestions.append(contentsOf: popularDestinations.map { destination in
+            LocationSuggestion(
+                location: destination,
+                reason: "Destination populaire",
+                priority: .popular
+            )
+        })
+    }
+    
+    private func getSuggestionReason(for location: Location, month: Int) -> String {
+        switch month {
+        case 12, 1, 2:
+            return "Climat idéal en hiver"
+        case 3, 4, 5:
+            return "Parfait au printemps"
+        case 6, 7, 8:
+            return "Fraîcheur estivale"
+        case 9, 10, 11:
+            return "Excellente saison"
+        default:
+            return "Recommandé"
+        }
     }
     
     // MARK: - Weather Data Methods
@@ -154,8 +397,13 @@ class WeatherViewModel: NSObject, ObservableObject {
         
         print("📍 Using location: \(userLocation.coordinate.latitude), \(userLocation.coordinate.longitude)")
         
+        // Résoudre le nom de lieu si ce n'est pas déjà fait
+        if resolvedLocationName.isEmpty {
+            await resolveLocationName(for: userLocation.coordinate)
+        }
+        
         let location = Location(
-            name: "Ma position",
+            name: resolvedLocationName.isEmpty ? "Ma position" : resolvedLocationName,
             country: "",
             coordinates: Location.Coordinates(
                 latitude: userLocation.coordinate.latitude,
@@ -194,13 +442,11 @@ class WeatherViewModel: NSObject, ObservableObject {
         await loadWeather(for: currentLocation)
     }
     
-    // MARK: - Location Permission Management - CORRIGÉ
+    // MARK: - Location Permission Management
     
     func requestLocationPermission() async {
         print("🔑 Requesting location permission...")
         
-        // CORRIGÉ: Ne pas appeler authorizationStatus sur le main thread
-        // Utiliser la propriété @Published qui est mise à jour par le delegate
         let currentStatus = locationPermissionStatus
         print("📍 Current status from property: \(currentStatus.rawValue)")
         
@@ -210,8 +456,7 @@ class WeatherViewModel: NSObject, ObservableObject {
             hasTriedLocationRequest = true
             locationManager.requestWhenInUseAuthorization()
             
-            // Attendre la réponse de l'utilisateur
-            try? await Task.sleep(nanoseconds: 3_000_000_000) // 3 secondes
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
             
         case .authorizedWhenInUse, .authorizedAlways:
             print("✅ Already authorized, starting location updates")
@@ -227,33 +472,17 @@ class WeatherViewModel: NSObject, ObservableObject {
             setDefaultLocation()
         }
         
-        // Si après 3 secondes toujours pas de position, utiliser la position par défaut
         if userLocation == nil {
             print("⏰ No location after timeout, using default")
             setDefaultLocation()
         }
     }
     
-    func requestLocationPermissionForced() async {
-        print("🔑 FORCED location permission request...")
-        
-        // Reset du flag pour forcer une nouvelle tentative
-        hasTriedLocationRequest = false
-        
-        // Forcer la demande
-        locationManager.requestWhenInUseAuthorization()
-        
-        // Attendre la réponse
-        try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 seconde
-        
-        print("📍 After forced request, status: \(locationPermissionStatus.rawValue)")
-    }
-    
     private func showLocationPermissionAlert() {
         errorMessage = "Pour obtenir la météo de votre position, activez la géolocalisation dans Réglages > Confidentialité > Services de localisation > Cirrus"
     }
     
-    // MARK: - Test Methods pour simulateur
+    // MARK: - Test Methods
     
     #if DEBUG
     func loadTestWeatherData() async {
@@ -277,6 +506,7 @@ class WeatherViewModel: NSObject, ObservableObject {
         print("🎯 Simulating location: \(name) (\(latitude), \(longitude))")
         let simulatedLocation = CLLocation(latitude: latitude, longitude: longitude)
         userLocation = simulatedLocation
+        resolvedLocationName = name
         hasTriedLocationRequest = true
         
         Task {
@@ -285,22 +515,7 @@ class WeatherViewModel: NSObject, ObservableObject {
     }
     #endif
     
-    // MARK: - Location Search
-    
-    private func searchLocations(query: String) async {
-        guard !query.isEmpty else {
-            searchResults = []
-            return
-        }
-        
-        do {
-            let locations = try await weatherService.searchLocations(query: query)
-            searchResults = locations
-        } catch {
-            print("Search error: \(error)")
-            searchResults = []
-        }
-    }
+    // MARK: - Location Selection
     
     func selectLocation(_ location: Location) async {
         searchText = ""
@@ -313,7 +528,7 @@ class WeatherViewModel: NSObject, ObservableObject {
     // MARK: - Favorites Management
     
     func toggleFavorite(for location: Location) {
-        if location.isFavorite {
+        if isFavorite(location) {
             removeFavorite(location)
         } else {
             addFavorite(location)
@@ -321,7 +536,6 @@ class WeatherViewModel: NSObject, ObservableObject {
     }
     
     private func addFavorite(_ location: Location) {
-        // Vérifier les limites pour les utilisateurs gratuits
         if !premiumManager.isPremium && favoriteLocations.count >= maxFreeDestinations {
             showingPremiumSheet = true
             return
@@ -350,8 +564,10 @@ class WeatherViewModel: NSObject, ObservableObject {
     }
     
     func isFavorite(_ location: Location) -> Bool {
-        return favoriteLocations.contains { $0.coordinates.latitude == location.coordinates.latitude &&
-            $0.coordinates.longitude == location.coordinates.longitude }
+        return favoriteLocations.contains { fav in
+            abs(fav.coordinates.latitude - location.coordinates.latitude) < 0.001 &&
+            abs(fav.coordinates.longitude - location.coordinates.longitude) < 0.001
+        }
     }
     
     // MARK: - Comparison Feature
@@ -407,7 +623,7 @@ class WeatherViewModel: NSObject, ObservableObject {
         showingComparison = false
     }
     
-    // MARK: - Trip Planning (Premium)
+    // MARK: - Trip Planning
     
     func createTrip(name: String, destinations: [Location], startDate: Date, endDate: Date) -> Trip {
         let tripDestinations = destinations.map { location in
@@ -456,7 +672,7 @@ class WeatherViewModel: NSObject, ObservableObject {
     private func handlePremiumStatusChange(_ isPremium: Bool) {
         if !isPremium {
             if favoriteLocations.count > maxFreeDestinations {
-                // Optionnel: informer l'utilisateur qu'il doit choisir ses favorites
+                // Informer l'utilisateur qu'il doit choisir ses favorites
             }
             
             if selectedLocationsForComparison.count > maxFreeComparisons {
@@ -531,21 +747,23 @@ class WeatherViewModel: NSObject, ObservableObject {
     
     func getComfortColor(score: Double) -> Color {
         switch score {
-        case 0.8...1.0:
-            return .green
-        case 0.6..<0.8:
-            return .yellow
-        case 0.4..<0.6:
-            return .orange
-        case 0.2..<0.4:
-            return .red
-        default:
-            return .purple
+        case 0.8...1.0: return .green
+        case 0.6..<0.8: return .yellow
+        case 0.4..<0.6: return .orange
+        default: return .red
         }
+    }
+    
+    func requestLocationPermissionForced() async {
+        print("🔑 FORCED location permission request...")
+        hasTriedLocationRequest = false
+        locationManager.requestWhenInUseAuthorization()
+        try? await Task.sleep(nanoseconds: 1_000_000_000)
+        print("📍 After forced request, status: \(locationPermissionStatus.rawValue)")
     }
 }
 
-// MARK: - CLLocationManagerDelegate - CORRIGÉ
+// MARK: - CLLocationManagerDelegate
 
 extension WeatherViewModel: CLLocationManagerDelegate {
     
@@ -555,7 +773,6 @@ extension WeatherViewModel: CLLocationManagerDelegate {
         print("📍 Location updated: \(location.coordinate.latitude), \(location.coordinate.longitude)")
         print("📍 Accuracy: \(location.horizontalAccuracy)m, Age: \(abs(location.timestamp.timeIntervalSinceNow))s")
         
-        // Ignorer les positions trop anciennes ou imprécises
         guard location.horizontalAccuracy < 100,
               abs(location.timestamp.timeIntervalSinceNow) < 60 else {
             print("⚠️ Location ignored due to poor accuracy or age")
@@ -565,6 +782,10 @@ extension WeatherViewModel: CLLocationManagerDelegate {
         Task { @MainActor in
             self.userLocation = location
             self.stopLocationUpdates()
+            
+            // Résoudre le nom de lieu
+            await self.resolveLocationName(for: location.coordinate)
+            
             await self.loadWeatherForCurrentLocation()
         }
     }
@@ -621,4 +842,20 @@ extension WeatherViewModel: CLLocationManagerDelegate {
             }
         }
     }
+}
+
+// MARK: - Supporting Models
+
+struct LocationSuggestion: Identifiable {
+    let id = UUID()
+    let location: Location
+    let reason: String
+    let priority: SuggestionPriority
+}
+
+enum SuggestionPriority {
+    case nearby
+    case seasonal
+    case popular
+    case recent
 }
