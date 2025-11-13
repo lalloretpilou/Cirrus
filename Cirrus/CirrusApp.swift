@@ -29,13 +29,19 @@ struct ContentView: View {
                     Image(systemName: "cloud.sun.fill")
                     Text("Météo")
                 }
-            
+
+            AviationView()
+                .tabItem {
+                    Image(systemName: "airplane")
+                    Text("Aviation")
+                }
+
             ComparisonView()
                 .tabItem {
                     Image(systemName: "rectangle.split.3x1")
                     Text("Comparer")
                 }
-            
+
             if premiumManager.canUseFeature(.weatherRadar) {
                 RadarView()
                     .tabItem {
@@ -43,7 +49,7 @@ struct ContentView: View {
                         Text("Radar")
                     }
             }
-            
+
             ProfileView()
                 .tabItem {
                     Image(systemName: "person.crop.circle")
