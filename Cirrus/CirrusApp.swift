@@ -244,18 +244,7 @@ struct RadarView: View {
     
     @ViewBuilder
     private func RadarContent() -> some View {
-        VStack {
-            // Radar map would go here
-            Text("Radar météo en temps réel")
-                .font(.title3)
-                .foregroundColor(.secondary)
-            
-            Text("Cette fonctionnalité nécessiterait l'intégration d'une carte interactive avec les données radar")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-                .padding()
-        }
+        RadarWeatherView()
     }
 }
 

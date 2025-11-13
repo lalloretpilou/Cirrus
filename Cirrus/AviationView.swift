@@ -56,6 +56,10 @@ struct AviationView: View {
                                     .padding(.horizontal)
                             }
 
+                            // Quick Access - Fonctionnalités avancées
+                            QuickAccessSection()
+                                .padding(.horizontal)
+
                             // Tabs: METAR, TAF, Winds Aloft, Nearby
                             TabSelector(selectedTab: $selectedTab)
                                 .padding(.horizontal)
@@ -1006,6 +1010,95 @@ struct AerodromeSearchView: View {
         }
 
         isSearching = false
+    }
+}
+
+// MARK: - Quick Access Section
+
+struct QuickAccessSection: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("🚀 Fonctionnalités Avancées")
+                .font(.headline)
+                .foregroundColor(.white)
+
+            HStack(spacing: 12) {
+                NavigationLink(destination: RadarWeatherView()) {
+                    QuickAccessCard(
+                        icon: "dot.radiowaves.left.and.right",
+                        title: "Radar Météo",
+                        subtitle: "Précipitations en temps réel",
+                        color: .blue
+                    )
+                }
+
+                NavigationLink(destination: IcingView()) {
+                    QuickAccessCard(
+                        icon: "snowflake",
+                        title: "Carte Givrage",
+                        subtitle: "Risque par altitude",
+                        color: .cyan
+                    )
+                }
+            }
+
+            NavigationLink(destination: RouteWeatherView()) {
+                QuickAccessCard(
+                    icon: "arrow.triangle.turn.up.right.diamond",
+                    title: "Météo en Route",
+                    subtitle: "Conditions continues départ → arrivée",
+                    color: .purple,
+                    fullWidth: true
+                )
+            }
+        }
+        .padding()
+        .background(Color.white.opacity(0.05))
+        .cornerRadius(12)
+    }
+}
+
+struct QuickAccessCard: View {
+    let icon: String
+    let title: String
+    let subtitle: String
+    let color: Color
+    var fullWidth: Bool = false
+
+    var body: some View {
+        HStack(spacing: 12) {
+            ZStack {
+                Circle()
+                    .fill(color.opacity(0.2))
+                    .frame(width: 50, height: 50)
+
+                Image(systemName: icon)
+                    .font(.title3)
+                    .foregroundColor(color)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.white)
+
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.7))
+                    .lineLimit(2)
+            }
+
+            Spacer()
+
+            Image(systemName: "chevron.right")
+                .font(.caption)
+                .foregroundColor(.white.opacity(0.5))
+        }
+        .padding()
+        .frame(maxWidth: fullWidth ? .infinity : nil)
+        .background(Color.white.opacity(0.1))
+        .cornerRadius(12)
     }
 }
 
