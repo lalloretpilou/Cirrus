@@ -1022,6 +1022,7 @@ struct QuickAccessSection: View {
                 .font(.headline)
                 .foregroundColor(.white)
 
+            // Première rangée: Radar + Givrage
             HStack(spacing: 12) {
                 NavigationLink(destination: RadarWeatherView()) {
                     QuickAccessCard(
@@ -1042,14 +1043,46 @@ struct QuickAccessSection: View {
                 }
             }
 
-            NavigationLink(destination: RouteWeatherView()) {
-                QuickAccessCard(
-                    icon: "arrow.triangle.turn.up.right.diamond",
-                    title: "Météo en Route",
-                    subtitle: "Conditions continues départ → arrivée",
-                    color: .purple,
-                    fullWidth: true
-                )
+            // Deuxième rangée: Brouillard + Crosswind
+            HStack(spacing: 12) {
+                NavigationLink(destination: FogForecastView()) {
+                    QuickAccessCard(
+                        icon: "cloud.fog",
+                        title: "Brouillard",
+                        subtitle: "Dissipation & risques",
+                        color: .gray
+                    )
+                }
+
+                NavigationLink(destination: CrosswindAnalysisView()) {
+                    QuickAccessCard(
+                        icon: "arrow.left.and.right",
+                        title: "Crosswind",
+                        subtitle: "Analyse multi-pistes",
+                        color: .orange
+                    )
+                }
+            }
+
+            // Troisième rangée: Route + Fenêtre Optimale
+            HStack(spacing: 12) {
+                NavigationLink(destination: RouteWeatherView()) {
+                    QuickAccessCard(
+                        icon: "arrow.triangle.turn.up.right.diamond",
+                        title: "Météo en Route",
+                        subtitle: "Conditions continues",
+                        color: .purple
+                    )
+                }
+
+                NavigationLink(destination: FlightWindowView()) {
+                    QuickAccessCard(
+                        icon: "calendar.badge.clock",
+                        title: "Fenêtre Optimale",
+                        subtitle: "Meilleur moment vol",
+                        color: .green
+                    )
+                }
             }
         }
         .padding()
